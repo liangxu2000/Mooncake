@@ -31,11 +31,9 @@
 #include "default_config.h"
 #include "shm_helper.h"
 #include "memory_location.h"
-#ifdef UBDIAG_ENABLED
 #define UBDIAG_PERF_DEF_FILE "mooncake_perf_points.def"
 #define UBDIAG_PROGRAM_NAME "mooncake_store"
 #include "ubdiag/auto_perf.h"
-#endif
 #ifdef USE_ASCEND_DIRECT
 #include "acl/acl_rt.h"
 #include "transport/ascend_transport/ascend_direct_transport/context_manager.h"

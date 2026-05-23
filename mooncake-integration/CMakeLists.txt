@@ -102,8 +102,6 @@ if(WITH_STORE)
   set_target_properties(store PROPERTIES INSTALL_RPATH "$ORIGIN")
 
   find_package(UbDiag REQUIRED)
-  message(STATUS "UbDiag found for store module: enabling performance instrumentation")
-  target_compile_definitions(store PRIVATE UBDIAG_ENABLED)
   target_include_directories(store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/store)
   target_link_libraries(store PRIVATE UbDiag::ubdiag_lib)
 

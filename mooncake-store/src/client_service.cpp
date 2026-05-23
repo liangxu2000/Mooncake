@@ -18,11 +18,9 @@
 
 #include "transfer_engine.h"
 #include "topology.h"
-#ifdef UBDIAG_ENABLED
 #define UBDIAG_PERF_DEF_FILE "mooncake_perf_points.def"
 #define UBDIAG_PROGRAM_NAME "mooncake_store"
 #include "ubdiag/auto_perf.h"
-#endif
 #include "transfer_task.h"
 #include "transport/transport.h"
 #include "config.h"
