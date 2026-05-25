@@ -2453,7 +2453,9 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     uint64_t total_length = calculate_total_size(replica);
 
     LOG(INFO) << "replica_selected key[" << key << "] type["
-              << (best_replica->is_memory_replica() ? "memory" : "disk")
+              << (best_replica->is_memory_replica()
+                      ? "memory"
+                      : (best_replica->is_local_disk_replica() ? "local_disk" : "disk"))
               << "] size[" << total_length << "]";
 
     if (total_length == 0) {

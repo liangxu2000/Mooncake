@@ -6,7 +6,7 @@
 flowchart TB
     Start["store_py::get(key)<br/>Python入口，释放GIL，调用get_buffer，返回结果<br/>🔑 store_py.cpp::get/Get"] --> GetBufferCall["store_->get_buffer(key)<br/>🔑 store_py.cpp::get/GetBuffer"]
 
-    GetBufferCall --> Internal["get_buffer_internal(key, allocator)<br/>核心逻辑：查询→选副本→分配→读取<br/>内部无Full打点，只有子步骤"]
+    GetBufferCall --> Internal["get_buffer_internal(key, allocator)<br/>核心逻辑：查询→选副本→分配→读取<br/>"]
 
     Internal --> QueryPart["部分1: client_->Query(key)<br/>向Master查询对象副本元数据<br/>🔑 real_client.cpp::get_buffer_internal/Query"]
     QueryPart --> SelectPart["部分2: SelectBestReplica<br/>从副本列表中选择最优副本<br/>🔑 real_client.cpp::get_buffer_internal/SelectReplica"]
@@ -22,7 +22,7 @@ flowchart TB
     ReadType -->|Yes| MemRead["部分4b-Memory: client_->Get(key, filtered_qr, slices)<br/>内存副本RDMA读取<br/>🔑 real_client.cpp::get_buffer_internal/MemRead"]
     ReadType -->|No| DiskRead["部分4b-Disk: client_->Get(key, filtered_qr, slices)<br/>磁盘副本文件I/O读取<br/>🔑 real_client.cpp::get_buffer_internal/DiskRead"]
 
-    MemRead --> ClientGetSub["Client::Get内部子步骤<br/>无Full打点，只有子步骤"]
+    MemRead --> ClientGetSub["Client::Get内部子步骤<br/>"]
     DiskRead --> ClientGetSub
 
     ClientGetSub --> FindReplica["子步骤1: FindFirstCompleteReplica<br/>🔑 client_service.cpp::Get/FindReplica"]
@@ -57,7 +57,7 @@ flowchart TB
 flowchart TB
     Start["store_py::get_batch(keys)<br/>Python入口，释放GIL，调用batch_get_buffer，返回结果<br/>🔑 store_py.cpp::get_batch/GetBatch"] --> BatchGetBufferCall["store_->batch_get_buffer(keys)<br/>🔑 store_py.cpp::get_batch/BatchGetBuffer"]
 
-    BatchGetBufferCall --> Internal["batch_get_buffer_internal(keys, allocator)<br/>核心逻辑：批量查询→选副本→分配→读取<br/>内部无Full打点，只有子步骤"]
+    BatchGetBufferCall --> Internal["batch_get_buffer_internal(keys, allocator)<br/>核心逻辑：批量查询→选副本→分配→读取<br/>"]
 
     Internal --> QueryPart["部分1: client_->BatchQuery(keys)<br/>批量向Master查询副本元数据<br/>🔑 real_client.cpp::batch_get_buffer_internal/BatchQuery"]
     QueryPart --> LoopPart["部分2: 循环逐key处理<br/>├ SelectBestReplica → real_client.cpp::batch_get_buffer_internal/SelectReplica<br/>└ allocator->allocate → real_client.cpp::batch_get_buffer_internal/AllocBuffer"]
@@ -68,7 +68,7 @@ flowchart TB
 
     CheckDisk -->|No| MemDiskRead["部分3b: client_->BatchGet(keys, query_results, slices)<br/>批量读取内存/磁盘副本<br/>🔑 real_client.cpp::batch_get_buffer_internal/MemDiskRead"]
 
-    MemDiskRead --> BatchGetSub["Client::BatchGet内部子步骤<br/>无Full打点，只有子步骤"]
+    MemDiskRead --> BatchGetSub["Client::BatchGet内部子步骤<br/>"]
 
     BatchGetSub --> SubmitLoop["提交阶段 [循环]<br/>├ FindFirstCompleteReplica → client_service.cpp::BatchGet/FindReplica<br/>├ RedirectToHotCache → client_service.cpp::BatchGet/HotCache<br/>└ submit → client_service.cpp::BatchGet/Submit"]
     SubmitLoop --> WaitLoop["等待阶段 [循环]<br/>├ future.get() → client_service.cpp::BatchGet/Wait<br/>├ ReleaseHotKey → client_service.cpp::BatchGet/ReleaseCache<br/>└ ProcessSlicesAsync → client_service.cpp::BatchGet/AsyncCache"]
@@ -94,7 +94,7 @@ flowchart TB
 flowchart TB
     Start["store_py::put(key, value)<br/>Python入口，释放GIL，调用store_->put()<br/>🔑 store_py.cpp::put/Put"] --> PutCall["store_->put(key, value, config)<br/>🔑 store_py.cpp::put/PutBuffer"]
 
-    PutCall --> Internal["put_internal(key, value, config, allocator)<br/>核心逻辑：分配→拷贝→切分→写入<br/>内部无Full打点，只有子步骤"]
+    PutCall --> Internal["put_internal(key, value, config, allocator)<br/>核心逻辑：分配→拷贝→切分→写入<br/>"]
 
     Internal --> AllocPart["部分1: allocator->allocate<br/>分配本地缓冲区(RDMA注册内存)<br/>🔑 real_client.cpp::put_internal/AllocBuffer"]
     AllocPart --> CopyPart["部分2: memcpy<br/>将用户数据拷贝到分配的缓冲区<br/>🔑 real_client.cpp::put_internal/MemCopy"]
@@ -146,7 +146,7 @@ flowchart TB
 flowchart TB
     Start["store_py::put_batch(keys, values)<br/>Python入口，释放GIL，调用store_->put_batch()<br/>🔑 store_py.cpp::put_batch/PutBatch"] --> PutBatchCall["store_->put_batch(keys, values, config)<br/>🔑 store_py.cpp::put_batch/BatchPutBuffer"]
 
-    PutBatchCall --> Internal["put_batch_internal(keys, values, config, allocator)<br/>核心逻辑：逐key分配→拷贝→切分→批量写入<br/>内部无Full打点，只有子步骤"]
+    PutBatchCall --> Internal["put_batch_internal(keys, values, config, allocator)<br/>核心逻辑：逐key分配→拷贝→切分→批量写入<br/>"]
 
     Internal --> LoopPart["部分1: 循环逐key处理<br/>对每个key执行以下3步:<br/>├ allocator->allocate → 🔑 real_client.cpp::put_batch_internal/AllocBuffer<br/>│  (分配本地缓冲区，RDMA注册内存)<br/>├ memcpy → 🔑 real_client.cpp::put_batch_internal/MemCopy<br/>│  (将用户数据拷贝到分配的缓冲区)<br/>└ split_into_slices → 🔑 real_client.cpp::put_batch_internal/SplitSlices<br/>   (按kMaxSliceSize切分为多个Slice)"]
 
