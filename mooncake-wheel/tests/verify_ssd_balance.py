@@ -283,9 +283,20 @@ def test_ssd_eviction_protection():
     """验证 SSD 满时禁止写入但已有数据不被驱逐。"""
     print("=== 验证：SSD 驱逐保护 ===\n")
 
-    store = create_store()
+    # 使用较小 SSD（5GB）以便测试能填满到高水位
+    # DDR=4GB, SSD=5GB → high_watermark=90% → 4.5GB（约 1150 个 4MB key）
+    ssd_size = 5 * 1024 * 1024 * 1024   # 5GB
+    ddr_size = DEFAULT_DDR_SIZE          # 4GB
+
+    store = create_store(
+        segment_size=ddr_size,
+        enable_offload=True,
+        ssd_total_size_override=ssd_size,
+    )
+
     num_initial = 20
-    num_pressure = 300
+    num_pressure = 1200
+    batch_size = 200
 
     # Phase 1: 写入初始数据
     initial_keys = []
@@ -303,29 +314,50 @@ def test_ssd_eviction_protection():
     print(f"  初始写入: {len(initial_keys)}/{num_initial} 成功")
     print_metrics("初始写入后")
 
-    # 等待 offload
-    print(f"\n  [2] 等待 20s 让 offload 完成...")
+    # 等待 offload，确保初始数据已落盘
+    print(f"\n  [2] 等待 20s 让初始数据 offload 到 SSD...")
     wait_with_progress(20)
     print_metrics("offload 后")
 
-    # Phase 2: 写入压力数据
+    # Phase 2: 分批写入压力数据填满 SSD
     pressure_keys = []
     rejected = 0
-    print(f"\n  [3] 写入 {num_pressure} 个压力 key...")
-    for i in range(num_pressure):
-        key = f"protect_pressure_{i}"
-        data = b"\x00" * KEY_SIZE
-        retcode = store.put(key, data)
-        if retcode == 0:
-            pressure_keys.append(key)
-        else:
-            rejected += 1
-        time.sleep(INSERT_INTERVAL)
+    total_written = 0
+    num_batches = (num_pressure + batch_size - 1) // batch_size
+    print(f"\n  [3] 分批写入 {num_pressure} 个压力 key（{num_batches} 批 × "
+          f"{batch_size} key）填满 SSD...")
 
-    print(f"  压力写入: {len(pressure_keys)} 成功, {rejected} 拒绝")
+    for batch_start in range(0, num_pressure, batch_size):
+        batch_end = min(batch_start + batch_size, num_pressure)
+        batch_num = batch_start // batch_size + 1
+        for i in range(batch_start, batch_end):
+            key = f"protect_pressure_{i}"
+            data = b"\x00" * KEY_SIZE
+            retcode = store.put(key, data)
+            if retcode == 0:
+                pressure_keys.append(key)
+                total_written += 1
+            else:
+                rejected += 1
+            time.sleep(INSERT_INTERVAL)
+
+        print(f"    批次 {batch_num}/{num_batches}: "
+              f"{total_written} 成功, {rejected} 拒绝")
+        print_metrics(f"批次 {batch_num} 后")
+
+        if batch_end < num_pressure:
+            print(f"    等待 20s 让 offload 排空 DDR...")
+            wait_with_progress(20)
+
+    print(f"  压力写入完成: {total_written} 成功, {rejected} 拒绝")
+
+    # 等待最终 offload
+    print(f"\n  [4] 等待 30s 让最终 offload 完成...")
+    wait_with_progress(30)
+    print_metrics("最终 offload 后")
 
     # Phase 3: 验证初始数据
-    print(f"\n  [4] 验证 {len(initial_keys)} 个初始 key...")
+    print(f"\n  [5] 验证 {len(initial_keys)} 个初始 key...")
     survived = 0
     lost = 0
     for key in initial_keys:

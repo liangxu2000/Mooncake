@@ -23,7 +23,7 @@ python verify_ssd_balance.py --test <test_name>
 
 ## 默认规模
 
-DDR=4GB, SSD=16GB, Key=4MB
+DDR=4GB, SSD=16GB, Key=4MB（各测试可能使用不同规模）
 
 ## 注意事项
 
@@ -34,13 +34,38 @@ DDR=4GB, SSD=16GB, Key=4MB
 
 ---
 
+## 日志观察方法
+
+写入被拒绝时，Client 端会输出 WARNING 级别日志，无需额外配置即可看到：
+
+```
+W... client_service.cpp:...] Failed to start put operation for key=xxx
+    due to insufficient space. Consider lowering eviction_high_watermark_ratio
+    or mounting more segments.
+```
+
+Master 端的拒绝日志需要开启 verbose 才能看到。启动 Master 时加上 `--v=1`：
+
+```bash
+mooncake_master --v=1 ...
+```
+
+开启后可观察：
+
+| Master 日志关键词 | 触发条件 | 含义 |
+|---|---|---|
+| `DDR overflow protection: rejecting allocation, ratio=X.XX` | 全局DDR使用率 > `eviction_high_watermark_ratio` | DDR准入控制生效（验证3） |
+| `Failed to allocate replicas for key=xxx, error: NO_AVAILABLE_HANDLE` | 所有segment被排除（SSD满） | SSD水位拒绝（验证2、4） |
+
+---
+
 ## 验证 1：SSD负载均衡（应首先运行）
 
 两个Client使用不同的SSD容量：
-- Client 1（写入端）：DDR=4GB, SSD=8GB → effective=4GB
-- Client 2：DDR=4GB, SSD=16GB → effective=12GB
+- Client 1（写入端）：DDR=4GB, SSD=8GB
+- Client 2：DDR=4GB, SSD=16GB
 
-写入约1200个4MB key（4.8GB），超过Client 1水位后自动溢出到Client 2。
+写入约1200个4MB key（4.8GB），按SSD空闲比例分配到两个Client。
 
 **Terminal 1** — 启动Master：
 
@@ -71,7 +96,7 @@ python mooncake-wheel/tests/verify_ssd_balance.py --test load_balancing
 - 等待60s offload后，两个SSD子目录均有文件：
   - Client 1: `/tmp/mooncake_ssd_balance_lb/client1`
   - Client 2: `/tmp/mooncake_ssd_balance_lb/client2`
-- **Client 2的SSD数据量 > Client 1的SSD数据量**（溢出行为正常）
+- **Client 2的SSD数据量 > Client 1的SSD数据量**（按比例分配正常）
 
 ### 判断标准
 
@@ -81,13 +106,14 @@ du -sh /tmp/mooncake_ssd_balance_lb/client1 /tmp/mooncake_ssd_balance_lb/client2
 
 - 两个子目录大小均 > 0
 - client2 > client1（按SSD空闲比例分配策略有效）
+- 两者使用率应接近（约 1:2 的数据量比，对应 8GB:16GB 容量比）
 
 ---
 
 ## 验证 2：SSD驱逐保护
 
-写入数据触发offload，然后继续写入填满SSD到高水位。
-验证已有数据不被驱逐。
+脚本内部使用较小SSD（DDR=4GB, SSD=5GB），使少量数据即可填满SSD到90%高水位。
+写入初始数据 → offload落盘 → 分批写入压力数据填满SSD → 验证初始数据不被驱逐。
 
 **Terminal 1** — 启动Master：
 
@@ -107,21 +133,28 @@ mooncake_master \
 
 ```bash
 MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
-MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES=17179869184 \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_ssd_balance_evict \
 python mooncake-wheel/tests/verify_ssd_balance.py --test ssd_eviction_protection
 ```
 
+注意：SSD容量由脚本内部控制（5GB），无需设置 `MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES`。
+
 ### 预期观察
 
-- 先写入20个初始key（80MB），等待20s offload
-- 继续写入压力key直到SSD满或DDR满
-- 初始key全部可读（未被驱逐）
+- 写入20个初始key（80MB），等待20s确保offload落盘到SSD
+- 分6批写入1200个压力key（4.8GB），每批200个，批间等待20s offload
+- 前几批写入全部成功，后几批开始出现拒绝：
+  ```
+  批次 5/6: 950 成功, 20 拒绝
+  ```
+- 脚本输出 `rejected` 计数 > 0 表示SSD接近满，分配策略开始拒绝
+- 初始20个key全部可读（未被驱逐）
 
 ### 判断标准
 
 - 初始写入的20个key全部可读，0个丢失
+- 压力阶段出现被拒绝的写入（SSD使用率超过90%）
 
 ---
 
@@ -154,14 +187,22 @@ python mooncake-wheel/tests/verify_ssd_balance.py --test ddr_admission
 
 ### 预期观察
 
-- 写入64MB大对象直到DDR满
-- DDR满后新写入失败（`NO_AVAILABLE_HANDLE`）
-- 删除部分对象后写入恢复
+- 写入64MB大对象逐步填满DDR
+- DDR满后新写入失败，Client 日志出现：
+  ```
+  W... Failed to start put operation for key=ddr_blocked_test
+      due to insufficient space...
+  ```
+  Master（需 `--v=1`）出现：
+  ```
+  DDR overflow protection: rejecting allocation, ratio=0.97
+  ```
+- 删除部分对象后写入恢复成功
 
 ### 判断标准
 
-- DDR满时写入被阻止
-- 释放空间后写入恢复成功
+- DDR满时写入被阻止（`store.put()` 返回非0）
+- 释放空间后写入恢复成功（`store.put()` 返回0）
 
 ---
 
@@ -195,14 +236,18 @@ python mooncake-wheel/tests/verify_ssd_balance.py --test all_ssd_full
 
 ### 预期观察
 
-- 写入大量16MB对象填满SSD
-- SSD满后新写入失败
+- 写入大量16MB对象，等待offload排空DDR
+- SSD满后新写入失败，Client 日志出现：
+  ```
+  W... Failed to start put operation for key=allfull_test
+      due to insufficient space...
+  ```
 - 删除部分数据后写入恢复
 
 ### 判断标准
 
-- SSD满时写入被阻止
-- 释放空间后写入恢复
+- SSD满时写入被阻止（`store.put()` 返回非0）
+- 释放空间后写入恢复（`store.put()` 返回0）
 
 ---
 
@@ -211,13 +256,6 @@ python mooncake-wheel/tests/verify_ssd_balance.py --test all_ssd_full
 | 变量 | 值 | 说明 |
 |------|----|------|
 | `MC_METADATA_SERVER` | `http://127.0.0.1:8880/metadata` | HTTP元数据服务器地址 |
-| `MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES` | `17179869184` | SSD容量16GB |
+| `MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES` | `17179869184` | SSD容量16GB（验证4使用，验证2由脚本内部控制） |
 | `MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS` | `1` | **必须设为1**，默认10s太慢 |
 | `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH` | 测试专用目录 | 每次测试前清空 |
-
-## 判断标准
-
-| 日志关键词 | 含义 |
-|-----------|------|
-| `DDR overflow protection: rejecting allocation` | DDR准入控制生效 |
-| `client_service.cpp ... NO_AVAILABLE_HANDLE` | Client端收到水位拒绝（预期行为） |
