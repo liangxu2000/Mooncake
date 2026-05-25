@@ -5421,8 +5421,11 @@ RealClient::batch_get_into_offload_object_internal(
         for (const auto &s : object_it.second) total += s.size;
         sizes.emplace_back(total);
     }
+    UbDiag::PerfPoint pt_rpc(PerfKey::GET_SSD_OFFLOAD_RPC, UbDiag::PerfLevel::MODULE);
+    pt_rpc.Start();
     auto batchGetResp = client_requester_->batch_get_offload_object(
         target_rpc_service_addr, keys, sizes);
+    pt_rpc.End(batchGetResp ? 0 : -1);
     if (!batchGetResp) {
         LOG(ERROR) << "Batch get offload object failed with error: "
                    << batchGetResp.error();
@@ -5433,9 +5436,12 @@ RealClient::batch_get_into_offload_object_internal(
                    << keys.size() << ", got=" << batchGetResp->pointers.size();
         return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
     }
+    UbDiag::PerfPoint pt_transfer(PerfKey::GET_SSD_TRANSFER_DATA, UbDiag::PerfLevel::MODULE);
+    pt_transfer.Start();
     auto result =
         client_->BatchGetOffloadObject(batchGetResp->transfer_engine_addr, keys,
                                        batchGetResp->pointers, objects);
+    pt_transfer.End(result ? 0 : -1);
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_time = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
@@ -5450,8 +5456,11 @@ RealClient::batch_get_into_offload_object_internal(
 
     // Release buffer immediately after transfer completion (fire-and-forget)
     // This allows early buffer reclamation instead of waiting for GC lease
+    UbDiag::PerfPoint pt_release(PerfKey::GET_SSD_RELEASE_BUFFER, UbDiag::PerfLevel::MODULE);
+    pt_release.Start();
     client_requester_->release_offload_buffer(target_rpc_service_addr,
                                               batchGetResp->batch_id);
+    pt_release.End(0);
 
     if (!result) {
         LOG(ERROR) << "Batch get into offload object failed with error: "

@@ -15,7 +15,10 @@ flowchart TB
     AllocPart --> CheckDisk{is_local_disk_replica?}
 
     CheckDisk -->|Yes| SSDPart["部分4a: batch_get_into_offload_object_internal<br/>通过RPC从远端SSD读取数据<br/>🔑 real_client.cpp::get_buffer_internal/SSDRead"]
-    SSDPart --> Done["返回"]
+    SSDPart --> SSDRpc["步骤1: batch_get_offload_object()<br/>RPC到远端节点，远端从SSD读数据到buffer<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/OffloadRpc"]
+    SSDRpc --> SSDTransfer["步骤2: BatchGetOffloadObject()<br/>Transfer Engine零拷贝搬数据到本地<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/TransferData"]
+    SSDTransfer --> SSDRelease["步骤3: release_offload_buffer()<br/>通知远端释放buffer(fire-and-forget)<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/ReleaseBuffer"]
+    SSDRelease --> Done["返回"]
 
     CheckDisk -->|No| ReadType{is_memory_replica?}
 
@@ -40,6 +43,9 @@ flowchart TB
     style SelectPart fill:#fff3e0
     style AllocPart fill:#fff3e0
     style SSDPart fill:#fce4ec
+    style SSDRpc fill:#fce4ec
+    style SSDTransfer fill:#fce4ec
+    style SSDRelease fill:#fce4ec
     style MemRead fill:#bbdefb
     style DiskRead fill:#ffccbc
     style ClientGetSub fill:#e3f2fd
@@ -65,6 +71,9 @@ flowchart TB
     LoopPart --> CheckDisk{有 LOCAL_DISK 副本?}
 
     CheckDisk -->|Yes| SSDPart["部分3a: batch_get_into_offload_object_internal<br/>🔑 real_client.cpp::batch_get_buffer_internal/SSDRead"]
+    SSDPart --> SSDRpc["步骤1: batch_get_offload_object()<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/OffloadRpc"]
+    SSDRpc --> SSDTransfer["步骤2: BatchGetOffloadObject()<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/TransferData"]
+    SSDTransfer --> SSDRelease["步骤3: release_offload_buffer()<br/>🔑 real_client.cpp::batch_get_into_offload_object_internal/ReleaseBuffer"]
 
     CheckDisk -->|No| MemDiskRead["部分3b: client_->BatchGet(keys, query_results, slices)<br/>批量读取内存/磁盘副本<br/>🔑 real_client.cpp::batch_get_buffer_internal/MemDiskRead"]
 
@@ -73,7 +82,7 @@ flowchart TB
     BatchGetSub --> SubmitLoop["提交阶段 [循环]<br/>├ FindFirstCompleteReplica → client_service.cpp::BatchGet/FindReplica<br/>├ RedirectToHotCache → client_service.cpp::BatchGet/HotCache<br/>└ submit → client_service.cpp::BatchGet/Submit"]
     SubmitLoop --> WaitLoop["等待阶段 [循环]<br/>├ future.get() → client_service.cpp::BatchGet/Wait<br/>├ ReleaseHotKey → client_service.cpp::BatchGet/ReleaseCache<br/>└ ProcessSlicesAsync → client_service.cpp::BatchGet/AsyncCache"]
 
-    SSDPart --> Done["返回"]
+    SSDRelease --> Done["返回"]
     WaitLoop --> Done
 
     style Start fill:#e8f5e9
@@ -82,6 +91,9 @@ flowchart TB
     style QueryPart fill:#fff3e0
     style LoopPart fill:#fff3e0
     style SSDPart fill:#fce4ec
+    style SSDRpc fill:#fce4ec
+    style SSDTransfer fill:#fce4ec
+    style SSDRelease fill:#fce4ec
     style MemDiskRead fill:#bbdefb
     style BatchGetSub fill:#e3f2fd
     style SubmitLoop fill:#f3e5f5
