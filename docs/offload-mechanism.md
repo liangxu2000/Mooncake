@@ -279,6 +279,26 @@ auto try_evict_or_offload = [&](const std::string& key, ObjectMetadata& metadata
 - `file_per_key_storage_backend`：每个对象一个文件。适合调试，大规模场景下文件数爆炸。
 - `offset_allocator_storage_backend`：单文件 + 偏移分配器，1024 分片元数据。高并发性能好，但**不支持重启恢复**（启动时 truncates）。
 
+#### `MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES`（默认 256MB）
+
+- BucketStorageBackend 单个桶文件的大小上限。配置定义在 `mooncake-store/include/storage_backend.h` 的 `BucketBackendConfig::bucket_size_limit`（:181-182）。
+- **分组逻辑**（`GroupOffloadingKeysByBucket()`，`storage_backend.cpp:1880`）：心跳返回的 offload 对象按此大小打包分组。对象被依次加入当前桶，直到桶数据量达到 256MB 或 500 个 key 为止。凑不满一桶的剩余对象暂存在 `ungrouped_offloading_objects_` 中，等下次心跳凑满再写入。
+- **设小（如 64MB）**：桶更小更密集，淘汰粒度更细（LRU/FIFO 淘汰时整桶删除，浪费空间更少），但文件数量增多。
+- **设大（如 512MB）**：减少文件数，但淘汰时整桶删除可能浪费更多有效数据。
+- **注意**：单个对象大小超过此限制时会被跳过（:1911 打印 ERROR 日志）。
+
+#### `MOONCAKE_OFFLOAD_BUCKET_KEYS_LIMIT`（默认 500）
+
+- BucketStorageBackend 单个桶文件的 key 数量上限。配置定义在 `BucketBackendConfig::bucket_keys_limit`（:184）。
+- 与 `bucket_size_limit` 共同控制分组，任一条件先达到即封桶。
+
+#### `MOONCAKE_OFFLOAD_BUCKET_EVICTION_POLICY`（默认 `none`）
+
+- BucketStorageBackend 的 SSD 空间淘汰策略。配置定义在 `BucketBackendConfig::eviction_policy`。
+- `none`：不淘汰。SSD 写满后 offload 失败。
+- `fifo`：淘汰最早创建的桶。
+- `lru`：淘汰最久未被读取的桶（通过 `last_access_ns_` 原子计数器追踪）。
+
 #### `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES`（默认 1280MB）
 
 - Load 路径的 staging buffer 大小。从 SSD 读取数据时先写入此 buffer，再通过 RDMA 传输。
