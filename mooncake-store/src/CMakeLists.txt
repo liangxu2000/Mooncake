@@ -162,7 +162,7 @@ endif()
 target_link_libraries(
   mooncake_store
   PUBLIC cachelib_memory_allocator ${ETCD_WRAPPER_LIB} glog::glog gflags::gflags
-         ${EXTRA_LIBS} asio_shared
+         ${EXTRA_LIBS} asio_shared mooncake_common
   PRIVATE transfer_engine)
 
 # UbDiag instrumentation

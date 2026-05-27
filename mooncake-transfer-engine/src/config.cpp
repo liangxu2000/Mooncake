@@ -256,6 +256,12 @@ void loadGlobalConfig(GlobalConfig& config) {
             config.log_level = google::ERROR;
     }
     FLAGS_minloglevel = config.log_level;
+    const char* log_enable = std::getenv("MC_LOG_ENABLE");
+    if (log_enable &&
+        (strcmp(log_enable, "off") == 0 || strcmp(log_enable, "0") == 0 ||
+         strcmp(log_enable, "false") == 0 || strcmp(log_enable, "no") == 0)) {
+        FLAGS_minloglevel = google::FATAL + 1;
+    }
 
     const char* slice_timeout_env = std::getenv("MC_SLICE_TIMEOUT");
     if (slice_timeout_env) {

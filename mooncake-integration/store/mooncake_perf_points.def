@@ -5,6 +5,10 @@ PERF_KEY_DEF(GET_STORE_PY_GET_BATCH,         "store_py.cpp::get_batch",         
 // === RealClient核心逻辑层 ===
 PERF_KEY_DEF(GET_BUFFER_INTERNAL,            "store_py.cpp::get",                          "GetBuffer")
 PERF_KEY_DEF(GET_BATCH_BUFFER_INTERNAL,      "store_py.cpp::get_batch",                    "BatchGetBuffer")
+PERF_KEY_DEF(GET_BUFFER_INTERNAL_FULL,       "real_client.cpp::get_buffer",                "GetBufferInternal")
+PERF_KEY_DEF(GET_BATCH_BUFFER_INTERNAL_FULL, "real_client.cpp::batch_get_buffer",          "BatchGetBufferInternal")
+PERF_KEY_DEF(GET_INTO_INTERNAL,              "real_client.cpp::get_into",                  "GetIntoInternal")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL,        "real_client.cpp::batch_get_into",            "BatchGetIntoInternal")
 
 // === get_buffer_internal 子步骤 ===
 PERF_KEY_DEF(GET_INTERNAL_QUERY,             "real_client.cpp::get_buffer_internal",       "Query")
@@ -21,6 +25,22 @@ PERF_KEY_DEF(GET_BATCH_INTERNAL_SELECT_REPLICA, "real_client.cpp::batch_get_buff
 PERF_KEY_DEF(GET_BATCH_INTERNAL_ALLOC_BUFFER,       "real_client.cpp::batch_get_buffer_internal", "AllocBuffer")
 PERF_KEY_DEF(GET_BATCH_INTERNAL_SSD_READ,    "real_client.cpp::batch_get_buffer_internal", "SSDRead")
 PERF_KEY_DEF(GET_BATCH_INTERNAL_MEMDISH_READ,"real_client.cpp::batch_get_buffer_internal", "MemDiskRead")
+
+// === get_into_internal steps ===
+PERF_KEY_DEF(GET_INTO_INTERNAL_QUERY,        "real_client.cpp::get_into_internal",         "Query")
+PERF_KEY_DEF(GET_INTO_INTERNAL_SELECT_REPLICA, "real_client.cpp::get_into_internal",       "SelectReplica")
+PERF_KEY_DEF(GET_INTO_INTERNAL_ALLOC_BUFFER, "real_client.cpp::get_into_internal",         "AllocBuffer")
+PERF_KEY_DEF(GET_INTO_INTERNAL_SSD_READ,     "real_client.cpp::get_into_internal",         "SSDRead")
+PERF_KEY_DEF(GET_INTO_INTERNAL_MEM_READ,     "real_client.cpp::get_into_internal",         "MemRead")
+PERF_KEY_DEF(GET_INTO_INTERNAL_DISK_READ,    "real_client.cpp::get_into_internal",         "DiskRead")
+
+// === batch_get_into_internal steps ===
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_QUERY,  "real_client.cpp::batch_get_into_internal",   "BatchQuery")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_SELECT_REPLICA, "real_client.cpp::batch_get_into_internal", "SelectReplica")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_ALLOC_BUFFER, "real_client.cpp::batch_get_into_internal", "AllocBuffer")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_MEM_READ, "real_client.cpp::batch_get_into_internal", "MemRead")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_DISK_READ, "real_client.cpp::batch_get_into_internal", "DiskRead")
+PERF_KEY_DEF(GET_BATCH_INTO_INTERNAL_SSD_READ, "real_client.cpp::batch_get_into_internal", "SSDRead")
 
 // === Client::Get (单key) ===
 PERF_KEY_DEF(GET_SINGLE_FULL,                "client_service.cpp::Get",                    "TransferGet")

@@ -268,10 +268,11 @@ struct MemcpyOperation {
 struct MemcpyTask {
     std::vector<MemcpyOperation> operations;
     std::shared_ptr<MemcpyOperationState> state;
+    uint64_t trace_id;
 
     MemcpyTask(std::vector<MemcpyOperation> ops,
-               std::shared_ptr<MemcpyOperationState> s)
-        : operations(std::move(ops)), state(std::move(s)) {}
+               std::shared_ptr<MemcpyOperationState> s, uint64_t trace)
+        : operations(std::move(ops)), state(std::move(s)), trace_id(trace) {}
 };
 
 /**
@@ -315,14 +316,16 @@ struct FilereadTask {
     size_t object_size;
     std::vector<Slice> slices;
     std::shared_ptr<FilereadOperationState> state;
+    uint64_t trace_id;
 
     FilereadTask(const std::string& path, size_t size,
                  const std::vector<Slice>& slices_ref,
-                 std::shared_ptr<FilereadOperationState> s)
+                 std::shared_ptr<FilereadOperationState> s, uint64_t trace)
         : file_path(path),
           object_size(size),
           slices(slices_ref),
-          state(std::move(s)) {}
+          state(std::move(s)),
+          trace_id(trace) {}
 };
 
 /**

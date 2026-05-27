@@ -409,6 +409,228 @@ store.get_batch(keys)  →  list[py::bytes]
 
 ---
 
+### GetInto 的完整底层逻辑（单 key，写入用户 buffer）
+
+`get_into` 是 `get_buffer` 的零拷贝读版本：调用方提前提供目标 buffer，Mooncake 将对象数据直接写入该 buffer，避免 `get_buffer` 路径中“分配内部 buffer → 转成 bytes/再拷贝给上层”的额外数据搬运。该 buffer 通常需要提前通过 `register_buffer()` 注册，典型场景是 vLLM/SGLang 的 KV cache 内存池。
+
+#### 第1层：上层入口
+
+```
+store.get_into(key, buffer, size)  →  int64_t
+```
+
+1. 调用方传入：
+   - `key`：要读取的对象 key
+   - `buffer`：目标写入地址
+   - `size`：目标 buffer 容量
+2. 返回值：
+   - 成功 → 返回实际读取字节数
+   - 失败 → 返回负数错误码
+
+#### 第2层：RealClient 外层（real_client.cpp::get_into）
+
+`get_into()` 负责计时、统计和返回值转换：
+
+1. 调用 `execute_timed_operation(...)` 包裹整个读流程
+2. 调用 `get_into_range_internal(key, buffer, 0, 0, size, true)`
+   - `dst_offset = 0`
+   - `src_offset = 0`
+   - `size_is_buffer_capacity = true`，表示传入的 `size` 是目标 buffer 容量，不是指定读取长度
+3. 成功后调用 `ObserveTransferOperation(READ, "get_into", bytes, latency_us)`
+4. 将 `tl::expected<int64_t, ErrorCode>` 转换为 Python/C API 风格返回值
+
+#### 第3层：元数据解析（real_client.cpp::resolve_ranged_read_metadata）
+
+`get_into_range_internal()` 首先解析读取所需元数据：
+
+1. **查询元数据**：`client_->Query(key)`
+   - `OBJECT_NOT_FOUND` / `REPLICA_IS_NOT_READY` → 返回对应错误
+   - 其他错误 → LOG(ERROR) + 返回错误
+2. **校验 replica 列表**：空列表 → `INVALID_PARAMS`
+3. **选择最优副本**：`SelectBestReplica(replica_list, local_endpoints)`
+   - 优先级与 `get_buffer` 相同：**本地 MEMORY > 远端 MEMORY > LOCAL_DISK > DISK**
+4. **计算对象总大小**：`calculate_total_size(replica)`
+5. 返回 `RangedReadMetadata{query_result, replica, total_size}`
+
+#### 第4层：执行读取（real_client.cpp::execute_ranged_read）
+
+`execute_ranged_read()` 先按**读取范围**分为完整读取和部分读取，再按**副本类型**分为 MEMORY / DISK / LOCAL_DISK。这样分不是为了复杂化逻辑，而是因为这两个维度决定了能不能直接把数据写进用户 buffer：
+
+- **读取范围决定能不能直接使用底层能力**：完整读取通常可以直接复用 `Client::Get` / SSD offload，把整个对象一次性写入目标 buffer；部分读取只需要对象的一段，如果底层路径不支持源 offset 或不能随机读，就必须先读到临时 buffer 再截取。
+- **副本类型决定数据从哪里来、用什么 I/O 读**：
+  - MEMORY：数据在内存副本中，可以通过 Transfer Engine / 本地 memcpy 直接读到用户 buffer。
+  - DISK：数据在当前节点本地文件中，文件 I/O 写入 GPU buffer 不安全或不可用，所以通常需要 CPU 临时 buffer。
+  - LOCAL_DISK：数据在远端节点 SSD 中，当前节点不能直接读这个文件，只能让远端节点 offload 读取，再通过网络传回来。
+
+1. **容量/范围检查**
+   - `size_is_buffer_capacity=true` 时：要求 `size >= total_size`，然后实际读取大小设为 `total_size`
+   - 范围读时：要求 `src_offset + size <= total_size`
+
+2. **为什么先区分完整读取和部分读取**
+
+   `get_into(key, buffer, size)` 走的是完整读取路径：`src_offset=0`，目标是把整个对象读出来。此时如果 `size >= total_size`，就可以把实际读取大小设成 `total_size`，尽量走最直接的路径。
+
+   `get_into_range` / `get_into_ranges` 这类范围读只需要对象中的一段，例如 `[src_offset, src_offset + size)`。范围读不能简单复用完整读取逻辑，否则会把不需要的数据也搬到用户 buffer，甚至覆盖用户不希望写入的区域。因此：
+
+   - MEMORY 路径支持源 offset，可以直接从 `src_offset` 开始读。
+   - DISK 路径当前依赖 `allocateSlices` / `Client::Get` 的完整对象切片模型，不能只为任意范围构造完整正确的文件读请求，所以先读完整对象到临时 buffer，再 scatter 目标范围。
+   - LOCAL_DISK offload 当前也是从远端 offset 0 顺序读取，不能直接告诉远端“只读 src_offset 之后这一段”，所以读 `[0, src_offset + size)` 到临时 buffer，再取目标范围。
+
+3. **完整对象读取：`src_offset == 0 && size == total_size`**
+
+   **[分支A] LOCAL_DISK 副本**：
+   - **为什么这样读**：LOCAL_DISK 表示对象文件在远端节点的本地 SSD 上。当前节点既没有这个本地文件，也不能通过普通文件 I/O 读取它，所以必须让远端节点执行 SSD 读取。
+   - **怎么读**：
+     - 构造 `objects[key] = {Slice{buffer + dst_offset, total_size}}`
+     - 调用 `batch_get_into_offload_object_internal(endpoint, objects)`
+     - 远端节点从 SSD 读到 offload buffer
+     - 再通过 Transfer Engine 把数据写入当前用户 buffer
+   - **为什么可以直接写用户 buffer**：完整对象读取时目标区域正好是整个对象大小，用户 buffer 容量已校验足够，因此不需要中间裁剪。
+
+   **[分支B] DISK 副本**：
+   - **为什么不直接写用户 buffer**：DISK 走本地文件 I/O。用户 buffer 可能是 GPU / Ascend / 其他设备内存，普通文件 I/O 不能保证能直接写入这些地址；即使是 CPU 地址，也需要统一处理设备场景。
+   - **怎么读**：
+     - 先用 `client_buffer_allocator_->allocate(total_size)` 分配 CPU 临时 buffer
+     - `allocateSlices(tmp_slices, replica, tmp_handle.ptr())`
+     - `client_->Get(key, filtered_qr, tmp_slices)` 从本地磁盘读到临时 buffer
+     - `scatter_host_to_maybe_device(buffer + dst_offset, tmp_handle.ptr(), total_size, ...)` 再把数据搬到用户 buffer
+   - **为什么完整读取仍要临时 buffer**：这里的限制来自目标内存类型，不是读取范围。只要目标可能是设备内存，DISK 文件读就先落到 CPU buffer，再由 scatter 处理 CPU/GPU 拷贝差异。
+
+   **[分支C] MEMORY 副本**：
+   - **为什么可以直接写用户 buffer**：MEMORY 副本由 Transfer Engine / memcpy 传输，目标地址可以是已注册的用户 buffer，适合零拷贝读。
+   - **怎么读**：
+     - `allocateSlices(slices, replica, buffer + dst_offset)`
+     - `FilterQueryResult(query_result, replica)`，确保 `Client::Get` 只看到选中的副本
+     - `client_->Get(key, filtered_qr, slices)` 直接把远端/本地内存副本读入用户 buffer
+   - **为什么这是最快路径**：不需要分配临时 buffer，也不需要读后 scatter；数据从内存副本直接进入调用方提供的目标区域。
+
+4. **部分读取：`src_offset != 0` 或 `size < total_size`**
+
+   **[分支A] LOCAL_DISK 范围读**：
+   - **为什么不能直接读目标范围**：当前 offload RPC 的对象描述只有目标 slices，没有表达“从远端文件 src_offset 开始读”的接口语义；远端按对象起点顺序读取。
+   - **为什么临时 buffer 大小是 `src_offset + size`**：只需要读到目标范围的结尾即可，不必读完整对象。比如要读 `[100, 120)`，远端读 `[0, 120)`，本地再取后 20 字节。
+   - **怎么读**：
+     - 分配 `src_offset + size` 的 CPU 临时 buffer
+     - offload 读取 `[0, src_offset + size)` 到临时 buffer
+     - scatter `[src_offset, src_offset + size)` 到用户 buffer
+
+   **[分支B] DISK 范围读**：
+   - **为什么读完整对象**：DISK 路径复用 `Client::Get + allocateSlices` 的文件读逻辑，它按对象副本切片构造读取任务；为了保持和完整对象切片、磁盘 descriptor、设备 scatter 的处理一致，当前实现先读完整对象。
+   - **为什么不能直接写用户范围**：同完整读取一样，目标 buffer 可能是设备内存，文件 I/O 不直接写设备地址。
+   - **怎么读**：
+     - 分配 `total_size` 的 CPU 临时 buffer
+     - 通过 `client_->Get` 读完整对象
+     - scatter `[src_offset, src_offset + size)` 到 `buffer + dst_offset`
+
+   **[分支C] MEMORY 范围读**：
+   - **为什么可以直接范围读**：内存传输路径支持传入源 offset，`client_->Get(key, query_result, slices, src_offset)` 可以让 Transfer 层从对象的 `src_offset` 开始搬运。
+   - **怎么读**：
+     - 构造单个目标 `Slice{buffer + dst_offset, size}`
+     - 调用 `client_->Get(key, query_result, slices, src_offset)`
+     - Transfer 层从源对象的 `src_offset` 开始读取，直接写入用户 buffer
+   - **为什么不需要临时 buffer**：源端支持 offset，目标端用户 buffer 已注册并且只写目标范围，所以没有裁剪或设备文件 I/O 的问题。
+
+5. **整体决策表**
+
+| 读取类型 | MEMORY | DISK | LOCAL_DISK |
+|---------|--------|------|------------|
+| 完整读取 | 直接 `Client::Get` 到用户 buffer | 文件 I/O 到 CPU 临时 buffer，再 scatter | 远端 SSD offload 直接写用户 buffer |
+| 部分读取 | `Client::Get(..., src_offset)` 直接读范围 | 读完整对象到 CPU 临时 buffer，再 scatter 范围 | 读 `[0, src_offset + size)` 到 CPU 临时 buffer，再 scatter 范围 |
+
+这张表背后的核心原则是：**能表达 offset 且能安全写用户 buffer 的路径就直接读；不能表达 offset 或不能安全写用户 buffer 的路径，就先读到 CPU 临时 buffer，再由 scatter 精确写入目标范围。**
+
+#### 第5层：Client 服务层
+
+MEMORY / DISK 分支最终仍复用 `Client::Get`：
+
+1. MEMORY 副本 → `TransferRead` → 本地 memcpy 或 Transfer Engine 远程 READ
+2. DISK 副本 → `FilereadWorkerPool` 本地文件读取
+3. LOCAL_DISK 副本不进入 `Client::Get`，在 RealClient 层提前走 `batch_get_into_offload_object_internal`
+
+---
+
+### BatchGetInto 的完整底层逻辑（批量 key，写入用户 buffers）
+
+`batch_get_into` 是 `batch_get_buffer` 的零拷贝读版本：每个 key 对应一个调用方提供的目标 buffer 和容量，结果按 key 顺序逐项返回。
+
+#### 第1层：上层入口
+
+```
+store.batch_get_into(keys, buffers, sizes)  →  list[int64_t]
+```
+
+1. `keys[i]` 对应 `buffers[i]` 和 `sizes[i]`
+2. 成功项返回读取字节数
+3. 失败项返回负数错误码
+4. 每个 key 独立成功/失败，批量调用不会因为单个 key 失败而整体失败
+
+#### 第2层：RealClient 外层（real_client.cpp::batch_get_into）
+
+1. 调用 `execute_timed_operation(...)` 包裹整个批量读流程
+2. 调用 `batch_get_into_internal(keys, buffers, sizes)`
+3. 统计所有成功项的正数字节数：`sum_positive_results(py_results)`
+4. 调用 `ObserveTransferOperation(READ, "batch_get_into", total_bytes, latency_us)`
+5. 将内部 `tl::expected<int64_t, ErrorCode>` 列表转换成 `vector<int64_t>`
+
+#### 第3层：批量准备（real_client.cpp::batch_get_into_internal）
+
+1. **前置校验**
+   - client 未初始化 → 所有项返回 `INVALID_PARAMS`
+   - `keys/buffers/sizes` 长度不一致 → 所有项返回 `INVALID_PARAMS`
+   - 空批量 → 返回空结果
+
+2. **批量查询元数据**
+   - 调用 `client_->BatchQuery(keys)`
+   - 查询失败的 key 直接写入对应错误码
+
+3. **逐 key 选择副本并分类**
+   - 校验 replica 列表非空
+   - `SelectBestReplica(query_result.replicas, local_endpoints)`
+   - `calculate_total_size(replica)`
+   - 校验 `sizes[i] >= total_size`
+   - 按副本类型分类：
+     - `valid_operations`：MEMORY 副本，直接读入用户 buffer
+     - `disk_operations`：DISK 副本，先读入 CPU 临时 buffer，再 scatter 到用户 buffer
+     - `valid_local_disk_operations`：LOCAL_DISK 副本，按 endpoint 走 SSD offload RPC
+
+#### 第4层：执行批量读取
+
+1. **MEMORY 批量读取**
+   - 为每个 MEMORY key 调用 `allocateSlices(key_slices, replica, buffers[i])`
+   - 构造 `batch_keys`、`batch_query_results`、`batch_slices`
+   - 调用 `client_->BatchGet(batch_keys, batch_query_results, batch_slices)`
+   - 失败项写回对应错误码
+
+2. **DISK 批量读取**
+   - 对每个 DISK key：
+     - 找到 DISK replica
+     - 用 `client_buffer_allocator_->allocate(total_size)` 分配 CPU 临时 buffer
+     - `allocateSlices(disk_slices, replica, temp_buffer)`
+   - 批量调用 `client_->BatchGet(disk_batch_keys, disk_batch_qrs, disk_batch_slices)`
+   - 成功后对每个 key 调用 `scatter_host_to_maybe_device(dst_buffer, temp_buffer, total_size, ...)`
+   - 读取失败或 scatter 失败都只影响当前 key
+
+3. **LOCAL_DISK 批量读取**
+   - 遍历 `valid_local_disk_operations`
+   - 从 query_result 中找 LOCAL_DISK replica
+   - 按 `transport_endpoint` 分组构造：
+     - `offload_objects[endpoint][key] = slices`
+   - 对每个 endpoint 调用 `batch_get_into_offload_object_internal(endpoint, objects)`
+   - 失败时，将该 endpoint 下所有 key 标记为相同错误
+
+#### 第5层：与 batch_get_buffer 的关键区别
+
+| 维度 | `batch_get_buffer` | `batch_get_into` |
+|------|--------------------|------------------|
+| 目标内存 | Mooncake 内部分配 `BufferHandle` | 调用方提供 `buffers[i]` |
+| MEMORY 路径 | 分配内部 buffer 后 `BatchGet` 写入 | `BatchGet` 直接写入用户 buffer |
+| DISK 路径 | 文件 I/O 可直接写内部 CPU buffer | 先写 CPU 临时 buffer，再 scatter 到用户 buffer |
+| LOCAL_DISK 路径 | offload RPC 写入内部 buffer | offload RPC 直接写入用户 buffer |
+| 返回值 | `vector<shared_ptr<BufferHandle>>` | `vector<int64_t>`，逐项表示字节数或错误码 |
+| 典型用途 | Python `get_batch` 返回 bytes | KV cache / GPU buffer 零拷贝读取 |
+
+---
+
 ### Get 关键区别总结
 
 | 维度 | Get（单key） | GetBatch（批量） |
