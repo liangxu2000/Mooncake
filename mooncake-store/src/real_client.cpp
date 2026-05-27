@@ -2636,17 +2636,19 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     const auto &replica = *best_replica;
     uint64_t total_length = calculate_total_size(replica);
 
-    // Set replica_type for breakdown log and build endpoint string
+    // Set replica_type for breakdown log
     if (replica.is_memory_replica()) {
-        replica_type = "memory";
-        std::string endpoint = replica.get_memory_descriptor().buffer_descriptor.transport_endpoint_;
+        const auto& endpoint = replica.get_memory_descriptor().buffer_descriptor.transport_endpoint_;
+        bool is_local = local_endpoints.count(endpoint) > 0;
+        replica_type = is_local ? "memory_local" : "memory_remote";
         MC_LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
                   << "] endpoint[" << endpoint << "] size[" << total_length << "]";
     } else if (replica.is_local_disk_replica()) {
-        replica_type = "local_disk";
-        std::string endpoint = replica.get_local_disk_descriptor().transport_endpoint;
+        const auto& ld_desc = replica.get_local_disk_descriptor();
+        bool is_local_holder = (ld_desc.client_id == client_->getClientId());
+        replica_type = is_local_holder ? "local_disk_local" : "local_disk_remote";
         MC_LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] endpoint[" << endpoint << "] size[" << total_length << "]";
+                  << "] endpoint[" << ld_desc.transport_endpoint << "] size[" << total_length << "]";
     } else {
         replica_type = "disk";
         std::string file_path = replica.get_disk_descriptor().file_path;
@@ -3334,19 +3336,20 @@ RealClient::resolve_ranged_read_metadata(const std::string &key) {
     auto total_size = calculate_total_size(replica);
     std::string replica_type;
     if (replica.is_memory_replica()) {
-        replica_type = "memory";
-        std::string endpoint =
+        const auto& endpoint =
             replica.get_memory_descriptor().buffer_descriptor
                 .transport_endpoint_;
+        bool is_local = local_endpoints.count(endpoint) > 0;
+        replica_type = is_local ? "memory_local" : "memory_remote";
         MC_LOG(INFO) << "replica_selected key[" << key << "] type["
                   << replica_type << "] endpoint[" << endpoint << "] size["
                   << total_size << "]";
     } else if (replica.is_local_disk_replica()) {
-        replica_type = "local_disk";
-        std::string endpoint =
-            replica.get_local_disk_descriptor().transport_endpoint;
+        const auto& ld_desc = replica.get_local_disk_descriptor();
+        bool is_local_holder = (ld_desc.client_id == client_->getClientId());
+        replica_type = is_local_holder ? "local_disk_local" : "local_disk_remote";
         MC_LOG(INFO) << "replica_selected key[" << key << "] type["
-                  << replica_type << "] endpoint[" << endpoint << "] size["
+                  << replica_type << "] endpoint[" << ld_desc.transport_endpoint << "] size["
                   << total_size << "]";
     } else {
         replica_type = "disk";
