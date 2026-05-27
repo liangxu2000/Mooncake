@@ -43,7 +43,7 @@ except ImportError:
 DEFAULT_MASTER = "127.0.0.1:50051"
 DEFAULT_NUM_KEYS = 80
 DEFAULT_VALUE_SIZE = 1024 * 1024  # 1 MB
-DEFAULT_SEGMENT_SIZE = 32 * 1024 * 1024  # 32 MB — easily overflowed
+DEFAULT_SEGMENT_SIZE = 64 * 1024 * 1024  # 64 MB — enough for batched writes to succeed
 DEFAULT_LOCAL_BUFFER_SIZE = 64 * 1024 * 1024  # 64 MB
 
 # Wait constants

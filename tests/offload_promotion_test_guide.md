@@ -33,13 +33,13 @@ python tests/verify_offload_promotion.py --test <test_name>
 
 ## 默认规模
 
-DDR = 32MB（`SEGMENT_SIZE_BYTES`），Value = 1MB，NumKeys = 80（≈80MB），每批写入 10 个 key 后暂停 2s 让 eviction+offload 释放内存。
+DDR = 64MB（`SEGMENT_SIZE_BYTES`），Value = 1MB，NumKeys = 80（≈80MB），每批写入 10 个 key 后暂停 2s 让 eviction+offload 释放内存。
 
 ## 分批写入机制
 
-`offload_on_evict=true` 模式下，eviction 必须先 offload 到 SSD 才能释放 DDR 空间。如果 80 个 key 连续写入（无间隔），DDR 在 ~32 个 key 时写满，后续全部被 `NO_AVAILABLE_HANDLE` 拒绝。
+`offload_on_evict=true` 模式下，eviction 必须先 offload 到 SSD 才能释放 DDR 空间。如果 80 个 key 连续写入（无间隔），DDR 很快写满，后续全部被 `NO_AVAILABLE_HANDLE` 拒绝。
 
-脚本使用 `batch_put(store, keys, batch_size=10, batch_pause=2.0)` 分批写入：每 10 个 key 暂停 2s，给 eviction 线程时间完成 offload→释放内存→下一批写入成功。
+脚本使用 `batch_put(store, keys, batch_size=10, batch_pause=2.0)` 分批写入：每 10 个 key 暂停 2s，给 eviction 线程时间完成 offload→释放内存→下一批写入成功。64MB DDR 可容纳约 4-5 批（40-50MB）后触发 eviction（0.70 水位 ≈ 44.8MB），剩余批次依赖 eviction 排空。
 
 ## 注意事项
 
@@ -80,7 +80,7 @@ MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_offload_promotion_1 \
 MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760 \
-SEGMENT_SIZE_BYTES=33554432 \
+SEGMENT_SIZE_BYTES=67108864 \
 python tests/verify_offload_promotion.py --test offload --master 127.0.0.1:50053
 ```
 
@@ -130,7 +130,7 @@ MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_offload_promotion_2 \
 MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760 \
-SEGMENT_SIZE_BYTES=33554432 \
+SEGMENT_SIZE_BYTES=67108864 \
 python tests/verify_offload_promotion.py --test load --master 127.0.0.1:50053
 ```
 
@@ -187,7 +187,7 @@ MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_offload_promotion_3 \
 MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760 \
-SEGMENT_SIZE_BYTES=33554432 \
+SEGMENT_SIZE_BYTES=67108864 \
 python tests/verify_offload_promotion.py --test promotion --master 127.0.0.1:50053
 ```
 
@@ -245,7 +245,7 @@ MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_offload_promotion_4 \
 MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760 \
-SEGMENT_SIZE_BYTES=33554432 \
+SEGMENT_SIZE_BYTES=67108864 \
 python tests/verify_offload_promotion.py --test exchange --master 127.0.0.1:50053
 ```
 
@@ -276,7 +276,7 @@ MC_METADATA_SERVER=http://127.0.0.1:8880/metadata \
 MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1 \
 MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/tmp/mooncake_offload_promotion_all \
 MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760 \
-SEGMENT_SIZE_BYTES=33554432 \
+SEGMENT_SIZE_BYTES=67108864 \
 python tests/verify_offload_promotion.py --test all --master 127.0.0.1:50053
 ```
 
@@ -288,7 +288,7 @@ python tests/verify_offload_promotion.py --test all --master 127.0.0.1:50053
 | `MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS` | `1` | **必须设为 1**，默认 10s 太慢 |
 | `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH` | 测试专用目录 | 每次测试前清空 |
 | `MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES` | `10485760`（10MB） | 必须设小，默认 256MB 导致不足一桶不落盘 |
-| `SEGMENT_SIZE_BYTES` | `33554432`（32MB） | DDR 段大小，设小以快速触发 eviction |
+| `SEGMENT_SIZE_BYTES` | `67108864`（64MB） | DDR 段大小，足够容纳 4-5 批写入后触发 eviction |
 | `DEFAULT_KV_LEASE_TTL` | `2000` | 缩短 lease 使 eviction 更快生效 |
 
 ## 关键 Master 启动参数
