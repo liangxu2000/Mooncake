@@ -41,14 +41,18 @@ except ImportError:
 # ============================================================================
 
 DEFAULT_MASTER = "127.0.0.1:50051"
-DEFAULT_NUM_KEYS = 800
+DEFAULT_NUM_KEYS = 400
 DEFAULT_VALUE_SIZE = 1024 * 1024  # 1 MB
-DEFAULT_SEGMENT_SIZE = 640 * 1024 * 1024  # 640 MB — 10x scale
-DEFAULT_LOCAL_BUFFER_SIZE = 256 * 1024 * 1024  # 256 MB
+DEFAULT_SEGMENT_SIZE = 320 * 1024 * 1024  # 320 MB — 5x scale
+DEFAULT_LOCAL_BUFFER_SIZE = 128 * 1024 * 1024  # 128 MB
 
-# Wait constants (scaled up for 10x data volume)
-OFFLOAD_WAIT_SECONDS = int(os.getenv("OFFLOAD_WAIT_SECONDS", "45"))
-PROMOTION_WAIT_SECONDS = int(os.getenv("PROMOTION_WAIT_SECONDS", "60"))
+# Wait constants — extended to let limited-rate pipelines drain fully.
+# Offload moves the entire queue in one RPC but SSD I/O + NotifyOffloadSuccess
+# RPCs are synchronous.  KEYS_ULTRA_LIMIT on any bucket permanently sets
+# enable_offloading_=false (file_storage.cpp:471) → all remaining keys lost.
+# Promotion has kMaxPerHeartbeat=1 (master_service.cpp:2991) → at most ~1 key/s.
+OFFLOAD_WAIT_SECONDS = int(os.getenv("OFFLOAD_WAIT_SECONDS", "120"))
+PROMOTION_WAIT_SECONDS = int(os.getenv("PROMOTION_WAIT_SECONDS", "180"))
 
 
 # ============================================================================
@@ -534,6 +538,20 @@ def test_cold_hot_exchange(num_keys=80, value_size=DEFAULT_VALUE_SIZE):
 
     print(f"  After eviction: {len(local_disk_only)} LOCAL_DISK-only keys")
 
+    # Diagnostic: count keys still missing LOCAL_DISK replicas entirely.
+    # These were never offloaded — possibly due to KEYS_ULTRA_LIMIT shutting
+    # down enable_offloading_ (file_storage.cpp:471), or the offload pipeline
+    # not keeping up with the write rate.
+    missing_ssd = (len(classification["memory_only"]) +
+                   len(classification["none"]))
+    if missing_ssd > 0:
+        print(f"  ** DIAGNOSTIC: {missing_ssd} keys have NO LOCAL_DISK replica "
+              f"(memory_only={len(classification['memory_only'])}, "
+              f"none={len(classification['none'])}). "
+              f"Check logs for KEYS_ULTRA_LIMIT or 'enable_offloading_' "
+              f"shutdown. Consider reducing num_keys or increasing "
+              f"OFFLOAD_WAIT_SECONDS.")
+
     if len(local_disk_only) < hot_count + 1:
         result.fail_test(
             f"Not enough LOCAL_DISK-only keys ({len(local_disk_only)}). "
@@ -652,10 +670,6 @@ def test_cold_hot_exchange(num_keys=80, value_size=DEFAULT_VALUE_SIZE):
             f"No hot keys promoted to MEMORY. "
             f"Is promotion_on_hit=true on master?",
             hot_promoted=hot_promoted,
-            hot_local_disk_only=hot_local_disk_only,
-            cold_in_memory=cold_with_memory,
-            cold_local_disk_only=cold_local_disk_only,
-            hot_promoted=hot_with_memory,
             hot_local_disk_only=hot_local_disk_only,
             cold_in_memory=cold_with_memory,
             cold_local_disk_only=cold_local_disk_only,

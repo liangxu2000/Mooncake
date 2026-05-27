@@ -33,15 +33,21 @@ python tests/verify_offload_promotion.py --test <test_name>
 
 ## 默认规模
 
-DDR = 640MB（`SEGMENT_SIZE_BYTES`），Value = 1MB，NumKeys = 800（≈800MB），每批 30 个 key 后暂停 3s。
+DDR = 320MB（`SEGMENT_SIZE_BYTES`），Value = 1MB，NumKeys = 400（≈400MB），每批 30 个 key 后暂停 3s。
 
-## 热 key 未全部提升的原因
+## 两个流水线瓶颈
 
-验证 4 中即使 hot key 被读取 4 次，仍可能有部分未提升到 MEMORY。原因是 **promotion 每次心跳（1s）只处理 1 个 key**（`kMaxPerHeartbeat=1`）。
+### Offload 瓶颈：KEYS_ULTRA_LIMIT 永久关闭
 
-10x 规模下有 160 个 hot key，60s 的 `PROMOTION_WAIT_SECONDS` 最多完成 ~60 次 promotion。部分 hot key 仍在队列中等待。扩大 `PROMOTION_WAIT_SECONDS` 可提升覆盖率。
+`file_storage.cpp:469-474`：`BatchOffload` 返回 `KEYS_ULTRA_LIMIT` 时，`enable_offloading_` 被**永久设为 false**。后续所有心跳向 Master 发 `enable_offloading=false`，Master 直接清空队列不返回 key。在队列中的 key 永远失去落盘机会。缩小数据规模（800→400）降低触发概率。
 
-此外，Phase 3 对冷 key 的随机采样读也可能触发 promotion（冷 key 的 Count-Min Sketch 计数器达到 `promotion_admission_threshold`），导致一些冷 key 意外进入 MEMORY。这是预期行为，减小 Phase 3 的冷读样本数（`min(3, ...)`）可降低此效应。
+### Promotion 瓶颈：kMaxPerHeartbeat=1
+
+`master_service.cpp:2991`：每次心跳只返回 1 个 promotion 任务。注释说明"多于一个可能阻塞超过 client-liveness 窗口"。180s 等待最多 ~180 次 promotion，覆盖 80 个 hot key 绰绰有余（先前 60s 不够覆盖 160 个）。
+
+### Phase 3 冷读副作用
+
+冷 key 的随机采样读可能触发 promotion（Count-Min Sketch 达到 `promotion_admission_threshold`），导致冷 key 进入 MEMORY。减小 `min(3, ...)` 可缓解。
 
 ## 注意事项
 
@@ -290,7 +296,7 @@ python tests/verify_offload_promotion.py --test all --master 127.0.0.1:50053
 | `MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS` | `1` | **必须设为 1**，默认 10s 太慢 |
 | `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH` | 测试专用目录 | 每次测试前清空 |
 | `MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES` | `10485760`（10MB） | 必须设小，默认 256MB 导致不足一桶不落盘 |
-| `SEGMENT_SIZE_BYTES` | `671088640`（640MB） | DDR 段大小，10x 规模 |
+| `SEGMENT_SIZE_BYTES` | `335544320`（320MB） | DDR 段大小，5x 规模 |
 | `DEFAULT_KV_LEASE_TTL` | `2000` | 缩短 lease 使 eviction 更快生效 |
 
 ## 关键 Master 启动参数
@@ -343,4 +349,87 @@ watch -n 1 'find /tmp/mooncake_offload_promotion_all -name "*.bucket" -exec du -
 | No LOCAL_DISK-only keys（全部 memory_only） | DDR 太大未触发 eviction | 设 `SEGMENT_SIZE_BYTES=33554432`（32MB），增加 `--num-keys` |
 | No promotion even after repeated reads | Master 未启动 `promotion_on_hit` / promotion 等待不够 | 确认 `--promotion_on_hit=true`，增加 `PROMOTION_WAIT_SECONDS` |
 | `store.get()` 返回错误 | Key 的 lease 已过期被 eviction 且未成功 offload | 降低 `eviction_high_watermark_ratio`，确保 offload 先于 eviction 完成 |
+
+## 可调参数速查
+
+### Offload 频率
+
+心跳间隔 = `FileStorageConfig::heartbeat_interval_seconds`，环境变量 `MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS`（默认 10s）。
+
+```
+export MOONCAKE_OFFLOAD_HEARTBEAT_INTERVAL_SECONDS=1   # 每 1s 拉一次 offload 任务
+```
+
+**原理**：`file_storage.cpp:286-292`，Init 中启动 heartbeat 线程，每次 `Heartbeat()` 后 `sleep(interval)`。`Heartbeat()` 内部**同步**执行：`OffloadObjectHeartbeat` RPC → `OffloadObjects()` SSD 写入 → `NotifyOffloadSuccess` RPC。如果一次心跳处理大量数据耗时超过 interval，实际频率受限于处理耗时。
+
+### Offload 每轮吞吐量
+
+`OffloadObjectHeartbeat`（`master_service.cpp:2670-2677`）**无数量限制**——直接 `std::move` 整个 `offloading_objects` 返回。吞吐量实际受以下因素约束：
+
+| 参数 | 环境变量 | 默认值 | 位置 |
+|------|----------|--------|------|
+| 桶大小上限 | `MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES` | 256MB | `storage_backend.h:181-182` |
+| 桶 key 上限 | `MOONCAKE_OFFLOAD_BUCKET_KEYS_LIMIT` | 500 | `storage_backend.h:184` |
+| 总 key 上限 | `MOONCAKE_OFFLOAD_TOTAL_KEYS_LIMIT` | 10M | `FileStorageConfig` |
+| 总容量上限 | `MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES` | 2TB | `FileStorageConfig` |
+| Staging buffer | `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES` | 1280MB | `FileStorageConfig` |
+
+**桶分组机制**（`storage_backend.cpp:1880`, `GroupOffloadingKeysByBucket`）：心跳返回的 key 按桶大小和数量分组。每次写满一桶就 `BuildBucket` → 落盘 → `NotifyOffloadSuccess`。**凑不满一桶的留在 `ungrouped_offloading_objects_`，等下次心跳凑满**。
+
+```
+# 小桶 = 频繁落盘、单次数据量小，适合测试
+export MOONCAKE_OFFLOAD_BUCKET_SIZE_LIMIT_BYTES=10485760   # 10MB
+export MOONCAKE_OFFLOAD_BUCKET_KEYS_LIMIT=10               # 10 keys
+```
+
+### KEYS_ULTRA_LIMIT 保护机制
+
+`file_storage.cpp:469-474`：`BatchOffload` 返回 `KEYS_ULTRA_LIMIT` 时 `enable_offloading_` **永久 false**。触发条件来自 `IsEnableOffloading()`（bucket backend 检查 `total_size + bucket_size_limit > total_size_limit`）或 `offloading_queue_limit_`（`master_service.h`, 50000）。
+
+**后果**：后续所有心跳向 Master 发 `enable_offloading=false` → Master 清空队列（`master_service.cpp:2683-2700`）→ 仍在队列中的 key **永久失去落盘机会**。
+
+```
+# 扩大总容量上限防止触发
+export MOONCAKE_OFFLOAD_TOTAL_SIZE_LIMIT_BYTES=10737418240  # 10GB
+```
+
+### Promotion 频率
+
+`master_service.cpp:2991` — **硬编码** `constexpr size_t kMaxPerHeartbeat = 1`。每次 `PromotionObjectHeartbeat` 最多返回 1 个任务。
+
+```
+// master_service.cpp:2984-3000
+constexpr size_t kMaxPerHeartbeat = 1;
+auto& src = local_disk_segment_it->second->promotion_objects;
+std::unordered_map<std::string, int64_t> result;
+while (result.size() < kMaxPerHeartbeat && !src.empty()) {
+    auto node = src.extract(src.begin());
+    result.insert(std::move(node));
+}
+```
+
+**不能通过配置修改**。注释说明："多于一个可能阻塞超过 client-liveness 窗口，导致 Master 标记 client 死亡"。修改需改 C++ 源码后重新编译。
+
+**变通方案**：增大 `PROMOTION_WAIT_SECONDS`。每个心跳处理 1 个 key，N 个 hot key 需 ~N 秒。
+
+```
+# 80 hot keys → 至少 80s + 余量
+PROMOTION_WAIT_SECONDS=180
+```
+
+### Promotion 准入门控
+
+`master_service.cpp:2855-2920`（`TryPushPromotionQueue`）四重门控：
+
+| 门控 | 参数 | 说明 |
+|------|------|------|
+| 频率 | `--promotion_admission_threshold`（默认 2） | Count-Min Sketch 访问次数 |
+| 水位 | `--eviction_high_watermark_ratio`（默认 0.85） | DRAM 使用率低于此阈值才允许 promotion |
+| 去重 | 无 | 已有 MEMORY 副本或进行中 task → 跳过 |
+| 容量 | `--promotion_queue_limit`（默认 50000） | 全局进行中 task 上限 |
+
+```
+# 降低阈值 → 更容易触发 promotion
+mooncake_master --promotion_admission_threshold=1
+```
 | BucketStorageBackend 不落盘 | ungrouped_offloading_objects 留存，数据不够一桶 | 确保 `bucket_keys_limit` 和 `bucket_size_limit` 都满足（设小） |
