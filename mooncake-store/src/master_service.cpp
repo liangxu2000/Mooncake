@@ -153,10 +153,9 @@ MasterService::MasterService(const MasterServiceConfig& config)
       segment_manager_(config.memory_allocator, config.enable_cxl),
       nof_segment_manager_(config.memory_allocator),
       memory_allocator_type_(config.memory_allocator),
-      allocation_strategy_(
-          CreateAllocationStrategy(config.allocation_strategy_type,
-                                   config.ssd_high_watermark_ratio,
-                                   config.ddr_admission_watermark_ratio)),
+      allocation_strategy_(CreateAllocationStrategy(
+          config.allocation_strategy_type, config.ssd_high_watermark_ratio,
+          config.ddr_admission_watermark_ratio)),
       enable_snapshot_restore_(config.enable_snapshot_restore),
       enable_snapshot_(config.enable_snapshot),
       snapshot_backup_dir_(config.snapshot_backup_dir),
@@ -1301,8 +1300,8 @@ auto MasterService::AllocateAndInsertMetadata(
 
         auto allocation_result = allocation_strategy_->Allocate(
             allocator_manager, value_length, config.replica_num,
-            preferred_segments, std::set<std::string>(),
-            ReplicaType::MEMORY, &ssd_access);
+            preferred_segments, std::set<std::string>(), ReplicaType::MEMORY,
+            &ssd_access);
 
         if (!allocation_result.has_value()) {
             VLOG(1) << "Failed to allocate replicas for key=" << key
@@ -2140,10 +2139,10 @@ auto MasterService::EvictDiskReplica(const UUID& client_id,
                                .client_id == client_id;
             },
             [&evicted_size](Replica& replica) {
-                evicted_size += static_cast<int64_t>(
-                    replica.get_descriptor()
-                        .get_local_disk_descriptor()
-                        .object_size);
+                evicted_size +=
+                    static_cast<int64_t>(replica.get_descriptor()
+                                             .get_local_disk_descriptor()
+                                             .object_size);
             });
         metadata.EraseReplicas([&client_id](const Replica& replica) {
             return replica.is_local_disk_replica() &&

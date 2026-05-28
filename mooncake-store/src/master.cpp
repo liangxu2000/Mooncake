@@ -733,8 +733,7 @@ void LoadConfigFromCmdline(mooncake::MasterConfig& master_config,
     if ((google::GetCommandLineFlagInfo("ssd_high_watermark_ratio", &info) &&
          !info.is_default) ||
         !conf_set) {
-        master_config.ssd_high_watermark_ratio =
-            FLAGS_ssd_high_watermark_ratio;
+        master_config.ssd_high_watermark_ratio = FLAGS_ssd_high_watermark_ratio;
     }
     if ((google::GetCommandLineFlagInfo("ddr_admission_watermark_ratio",
                                         &info) &&

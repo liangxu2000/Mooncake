@@ -1680,7 +1680,8 @@ tl::expected<void, ErrorCode> RealClient::put_internal(
         LOG(ERROR) << "Client buffer allocator is not provided";
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
-    UbDiag::PerfPoint pt_alloc(PerfKey::PUT_INTERNAL_ALLOC_BUFFER, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_alloc(PerfKey::PUT_INTERNAL_ALLOC_BUFFER,
+                               UbDiag::PerfLevel::MODULE);
     pt_alloc.Start();
     auto alloc_result = client_buffer_allocator->allocate(value.size_bytes());
     pt_alloc.End(alloc_result ? 0 : -1);
@@ -1690,23 +1691,28 @@ tl::expected<void, ErrorCode> RealClient::put_internal(
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
     auto &buffer_handle = *alloc_result;
-    UbDiag::PerfPoint pt_memcpy(PerfKey::PUT_INTERNAL_MEM_COPY, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_memcpy(PerfKey::PUT_INTERNAL_MEM_COPY,
+                                UbDiag::PerfLevel::MODULE);
     pt_memcpy.Start();
     memcpy(buffer_handle.ptr(), value.data(), value.size_bytes());
     pt_memcpy.End(0);
 
-    UbDiag::PerfPoint pt_split(PerfKey::PUT_INTERNAL_SPLIT_SLICES, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_split(PerfKey::PUT_INTERNAL_SPLIT_SLICES,
+                               UbDiag::PerfLevel::MODULE);
     pt_split.Start();
     std::vector<Slice> slices = split_into_slices(buffer_handle);
     pt_split.End(0);
 
     auto put_result = client_->Put(key, slices, config);
     if (!put_result) {
-        LOG(INFO) << "put_result key[" << key << "] rc[" << static_cast<int>(put_result.error()) << "] size[" << value.size_bytes() << "]";
+        LOG(INFO) << "put_result key[" << key << "] rc["
+                  << static_cast<int>(put_result.error()) << "] size["
+                  << value.size_bytes() << "]";
         return tl::unexpected(put_result.error());
     }
 
-    LOG(INFO) << "put_result key[" << key << "] rc[0] size[" << value.size_bytes() << "]";
+    LOG(INFO) << "put_result key[" << key << "] rc[0] size["
+              << value.size_bytes() << "]";
     return {};
 }
 
@@ -1767,7 +1773,8 @@ tl::expected<void, ErrorCode> RealClient::put_batch_internal(
     for (size_t i = 0; i < keys.size(); ++i) {
         auto &key = keys[i];
         auto &value = values[i];
-        UbDiag::PerfPoint pt_alloc(PerfKey::PUT_BATCH_INTERNAL_ALLOC_BUFFER, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_alloc(PerfKey::PUT_BATCH_INTERNAL_ALLOC_BUFFER,
+                                   UbDiag::PerfLevel::MODULE);
         pt_alloc.Start();
         auto alloc_result =
             client_buffer_allocator->allocate(value.size_bytes());
@@ -1779,11 +1786,13 @@ tl::expected<void, ErrorCode> RealClient::put_batch_internal(
             return tl::unexpected(ErrorCode::INVALID_PARAMS);
         }
         auto &buffer_handle = *alloc_result;
-        UbDiag::PerfPoint pt_memcpy(PerfKey::PUT_BATCH_INTERNAL_MEM_COPY, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_memcpy(PerfKey::PUT_BATCH_INTERNAL_MEM_COPY,
+                                    UbDiag::PerfLevel::MODULE);
         pt_memcpy.Start();
         memcpy(buffer_handle.ptr(), value.data(), value.size_bytes());
         pt_memcpy.End(0);
-        UbDiag::PerfPoint pt_split(PerfKey::PUT_BATCH_INTERNAL_SPLIT_SLICES, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_split(PerfKey::PUT_BATCH_INTERNAL_SPLIT_SLICES,
+                                   UbDiag::PerfLevel::MODULE);
         pt_split.Start();
         auto slices = split_into_slices(buffer_handle);
         pt_split.End(0);
@@ -1813,7 +1822,8 @@ tl::expected<void, ErrorCode> RealClient::put_batch_internal(
             num_failed++;
         }
     }
-    LOG(INFO) << "batch_put_result num_keys[" << keys.size() << "] num_failed[" << num_failed << "]";
+    LOG(INFO) << "batch_put_result num_keys[" << keys.size() << "] num_failed["
+              << num_failed << "]";
 
     for (size_t i = 0; i < results.size(); ++i) {
         if (!results[i]) {
@@ -2564,7 +2574,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     std::string replica_type;
 
     // Query the object info
-    UbDiag::PerfPoint pt_query(PerfKey::GET_INTERNAL_QUERY, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_query(PerfKey::GET_INTERNAL_QUERY,
+                               UbDiag::PerfLevel::MODULE);
     pt_query.Start();
     auto query_result = client_->Query(key);
     t_query = std::chrono::steady_clock::now();
@@ -2579,7 +2590,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         return nullptr;
     }
 
-    LOG(INFO) << "query_success key[" << key << "] replicas[" << query_result.value().replicas.size() << "]";
+    LOG(INFO) << "query_success key[" << key << "] replicas["
+              << query_result.value().replicas.size() << "]";
 
     const std::vector<Replica::Descriptor> &replica_list =
         query_result.value().replicas;
@@ -2592,7 +2604,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     // then LOCAL_DISK, then DISK.
     // LOCAL_DISK data is on a remote node's SSD — must use offload RPC.
     // MEMORY / DISK are handled via client_->Get below.
-    UbDiag::PerfPoint pt_select(PerfKey::GET_INTERNAL_SELECT_REPLICA, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_select(PerfKey::GET_INTERNAL_SELECT_REPLICA,
+                                UbDiag::PerfLevel::MODULE);
     pt_select.Start();
     auto local_endpoints = client_->GetLocalEndpoints();
     const auto *best_replica = SelectBestReplica(replica_list, local_endpoints);
@@ -2609,19 +2622,24 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     // Set replica_type for breakdown log and build endpoint string
     if (replica.is_memory_replica()) {
         replica_type = "memory";
-        std::string endpoint = replica.get_memory_descriptor().buffer_descriptor.transport_endpoint_;
+        std::string endpoint = replica.get_memory_descriptor()
+                                   .buffer_descriptor.transport_endpoint_;
         LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] endpoint[" << endpoint << "] size[" << total_length << "]";
+                  << "] endpoint[" << endpoint << "] size[" << total_length
+                  << "]";
     } else if (replica.is_local_disk_replica()) {
         replica_type = "local_disk";
-        std::string endpoint = replica.get_local_disk_descriptor().transport_endpoint;
+        std::string endpoint =
+            replica.get_local_disk_descriptor().transport_endpoint;
         LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] endpoint[" << endpoint << "] size[" << total_length << "]";
+                  << "] endpoint[" << endpoint << "] size[" << total_length
+                  << "]";
     } else {
         replica_type = "disk";
         std::string file_path = replica.get_disk_descriptor().file_path;
         LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] file_path[" << file_path << "] size[" << total_length << "]";
+                  << "] file_path[" << file_path << "] size[" << total_length
+                  << "]";
     }
 
     if (total_length == 0) {
@@ -2629,7 +2647,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     }
 
     // Allocate buffer
-    UbDiag::PerfPoint pt_alloc(PerfKey::GET_INTERNAL_ALLOC_BUFFER, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_alloc(PerfKey::GET_INTERNAL_ALLOC_BUFFER,
+                               UbDiag::PerfLevel::MODULE);
     pt_alloc.Start();
     auto alloc_result = client_buffer_allocator->allocate(total_length);
     t_alloc = std::chrono::steady_clock::now();
@@ -2644,19 +2663,31 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
 
     auto log_breakdown = [&](const char *status) {
         auto now = std::chrono::steady_clock::now();
-        auto query_us = std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0).count();
-        auto select_us = std::chrono::duration_cast<std::chrono::microseconds>(t_select - t_query).count();
-        auto alloc_us = std::chrono::duration_cast<std::chrono::microseconds>(t_alloc - t_select).count();
-        auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(now - t_alloc).count();
-        auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(now - t0).count();
-        LOG(INFO) << "get_breakdown key[" << key << "] query_us[" << query_us << "] select_us[" << select_us
-                  << "] alloc_us[" << alloc_us << "] read_us[" << read_us << "] total_us[" << total_us
+        auto query_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0)
+                .count();
+        auto select_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                             t_select - t_query)
+                             .count();
+        auto alloc_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            t_alloc - t_select)
+                            .count();
+        auto read_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - t_alloc)
+                .count();
+        auto total_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - t0)
+                .count();
+        LOG(INFO) << "get_breakdown key[" << key << "] query_us[" << query_us
+                  << "] select_us[" << select_us << "] alloc_us[" << alloc_us
+                  << "] read_us[" << read_us << "] total_us[" << total_us
                   << "] type[" << replica_type << "] status[" << status << "]";
     };
 
     if (best_replica->is_local_disk_replica()) {
         // LOCAL_DISK: data is on remote node's SSD. Use offload RPC.
-        UbDiag::PerfPoint pt_ssd(PerfKey::GET_INTERNAL_SSD_READ, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_ssd(PerfKey::GET_INTERNAL_SSD_READ,
+                                 UbDiag::PerfLevel::MODULE);
         pt_ssd.Start();
         const auto &endpoint =
             best_replica->get_local_disk_descriptor().transport_endpoint;
@@ -2914,7 +2945,8 @@ RealClient::batch_get_buffer_internal(
     auto t_query = t0, t_prep = t0, t_read = t0;
 
     // 1. Query metadata for all keys
-    UbDiag::PerfPoint pt_bquery(PerfKey::GET_BATCH_INTERNAL_QUERY, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_bquery(PerfKey::GET_BATCH_INTERNAL_QUERY,
+                                UbDiag::PerfLevel::MODULE);
     pt_bquery.Start();
     auto query_results = client_->BatchQuery(keys);
     t_query = std::chrono::steady_clock::now();
@@ -2924,7 +2956,8 @@ RealClient::batch_get_buffer_internal(
     for (const auto &result : query_results) {
         if (result) num_found++;
     }
-    LOG(INFO) << "batch_query_result num_keys[" << keys.size() << "] num_found[" << num_found << "]";
+    LOG(INFO) << "batch_query_result num_keys[" << keys.size() << "] num_found["
+              << num_found << "]";
 
     // 2. Prepare for batch get: filter valid keys and prepare buffers
     struct KeyOp {
@@ -2966,7 +2999,8 @@ RealClient::batch_get_buffer_internal(
 
         // Select best replica: prefer local MEMORY, then any MEMORY,
         // then LOCAL_DISK, then DISK.
-        UbDiag::PerfPoint pt_bsel(PerfKey::GET_BATCH_INTERNAL_SELECT_REPLICA, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_bsel(PerfKey::GET_BATCH_INTERNAL_SELECT_REPLICA,
+                                  UbDiag::PerfLevel::MODULE);
         pt_bsel.Start();
         const auto *best_replica =
             SelectBestReplica(query_result_values.replicas, local_endpoints);
@@ -2983,7 +3017,8 @@ RealClient::batch_get_buffer_internal(
 
         auto &allocator = client_buffer_allocator ? client_buffer_allocator
                                                   : client_buffer_allocator_;
-        UbDiag::PerfPoint pt_balloc(PerfKey::GET_BATCH_INTERNAL_ALLOC_BUFFER, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_balloc(PerfKey::GET_BATCH_INTERNAL_ALLOC_BUFFER,
+                                    UbDiag::PerfLevel::MODULE);
         pt_balloc.Start();
         auto alloc_result = allocator->allocate(total_size);
         pt_balloc.End(alloc_result ? 0 : -1);
@@ -3036,7 +3071,8 @@ RealClient::batch_get_buffer_internal(
 
     // 3. Execute batch get for memory/disk replicas
     if (!valid_ops.empty()) {
-        UbDiag::PerfPoint pt_bget(PerfKey::GET_BATCH_INTERNAL_MEMDISH_READ, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_bget(PerfKey::GET_BATCH_INTERNAL_MEMDISH_READ,
+                                  UbDiag::PerfLevel::MODULE);
         pt_bget.Start();
         std::vector<std::string> batch_keys;
         std::vector<QueryResult> batch_query_results;
@@ -3070,7 +3106,8 @@ RealClient::batch_get_buffer_internal(
 
     // 5. Execute batch get for LOCAL_DISK replicas via SSD RPC
     if (!disk_ops.empty()) {
-        UbDiag::PerfPoint pt_bssd(PerfKey::GET_BATCH_INTERNAL_SSD_READ, UbDiag::PerfLevel::MODULE);
+        UbDiag::PerfPoint pt_bssd(PerfKey::GET_BATCH_INTERNAL_SSD_READ,
+                                  UbDiag::PerfLevel::MODULE);
         pt_bssd.Start();
         // Group by transport endpoint
         std::unordered_map<std::string,
@@ -3129,16 +3166,24 @@ RealClient::batch_get_buffer_internal(
         if (result) success_count++;
     }
     {
-        auto query_us = std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0).count();
-        auto prep_us = std::chrono::duration_cast<std::chrono::microseconds>(t_prep - t_query).count();
-        auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(t_read - t_prep).count();
-        auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(t_read - t0).count();
+        auto query_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0)
+                .count();
+        auto prep_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                           t_prep - t_query)
+                           .count();
+        auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                           t_read - t_prep)
+                           .count();
+        auto total_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_read - t0)
+                .count();
         LOG(INFO) << "batch_get_breakdown num_keys[" << keys.size()
                   << "] query_us[" << query_us << "] prep_us[" << prep_us
                   << "] read_us[" << read_us << "] total_us[" << total_us
                   << "] batch_get_ops[" << valid_ops.size()
-                  << "] ssd_offload_ops[" << disk_ops.size()
-                  << "] success[" << success_count << "]";
+                  << "] ssd_offload_ops[" << disk_ops.size() << "] success["
+                  << success_count << "]";
     }
 
     return final_results;
@@ -5630,7 +5675,8 @@ RealClient::batch_get_into_offload_object_internal(
         for (const auto &s : object_it.second) total += s.size;
         sizes.emplace_back(total);
     }
-    UbDiag::PerfPoint pt_rpc(PerfKey::GET_SSD_OFFLOAD_RPC, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_rpc(PerfKey::GET_SSD_OFFLOAD_RPC,
+                             UbDiag::PerfLevel::MODULE);
     pt_rpc.Start();
     auto batchGetResp = client_requester_->batch_get_offload_object(
         target_rpc_service_addr, keys, sizes);
@@ -5645,7 +5691,8 @@ RealClient::batch_get_into_offload_object_internal(
                    << keys.size() << ", got=" << batchGetResp->pointers.size();
         return tl::make_unexpected(ErrorCode::INVALID_PARAMS);
     }
-    UbDiag::PerfPoint pt_transfer(PerfKey::GET_SSD_TRANSFER_DATA, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_transfer(PerfKey::GET_SSD_TRANSFER_DATA,
+                                  UbDiag::PerfLevel::MODULE);
     pt_transfer.Start();
     auto result =
         client_->BatchGetOffloadObject(batchGetResp->transfer_engine_addr, keys,
@@ -5659,14 +5706,14 @@ RealClient::batch_get_into_offload_object_internal(
     int64_t total_size = 0;
     for (auto s : sizes) total_size += s;
     LOG(INFO) << "ssd_read_detail endpoint[" << target_rpc_service_addr
-              << "] num_keys[" << objects.size()
-              << "] total_size[" << total_size
-              << "] elapsed_ms[" << elapsed_time
-              << "] batch_id[" << batchGetResp->batch_id << "]";
+              << "] num_keys[" << objects.size() << "] total_size["
+              << total_size << "] elapsed_ms[" << elapsed_time << "] batch_id["
+              << batchGetResp->batch_id << "]";
 
     // Release buffer immediately after transfer completion (fire-and-forget)
     // This allows early buffer reclamation instead of waiting for GC lease
-    UbDiag::PerfPoint pt_release(PerfKey::GET_SSD_RELEASE_BUFFER, UbDiag::PerfLevel::MODULE);
+    UbDiag::PerfPoint pt_release(PerfKey::GET_SSD_RELEASE_BUFFER,
+                                 UbDiag::PerfLevel::MODULE);
     pt_release.Start();
     client_requester_->release_offload_buffer(target_rpc_service_addr,
                                               batchGetResp->batch_id);

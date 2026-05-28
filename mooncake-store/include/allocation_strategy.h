@@ -122,7 +122,8 @@ class AllocatorManager {
 class SsdMetricsProvider {
    public:
     virtual ~SsdMetricsProvider() = default;
-    virtual int64_t getSsdTotalCapacity(const std::string& segment_name) const = 0;
+    virtual int64_t getSsdTotalCapacity(
+        const std::string& segment_name) const = 0;
     virtual int64_t getSsdUsedBytes(const std::string& segment_name) const = 0;
     virtual double getDdrUsedRatio(const std::string& segment_name) const {
         return 0.0;
@@ -651,8 +652,7 @@ class SsdBalanceAllocationStrategy : public RandomAllocationStrategy {
                 continue;
             }
 
-            double ssd_free_ratio =
-                getSegmentSsdFreeRatio(name, ssd_provider);
+            double ssd_free_ratio = getSegmentSsdFreeRatio(name, ssd_provider);
             candidates.push_back({idx, ssd_free_ratio});
         }
 
@@ -745,16 +745,14 @@ class SsdBalanceAllocationStrategy : public RandomAllocationStrategy {
 
     bool isDdrHighWatermark(const std::string& name,
                             const SsdMetricsProvider* provider) const {
-        if (ddr_admission_watermark_ <= 0.0 ||
-            ddr_admission_watermark_ >= 1.0)
+        if (ddr_admission_watermark_ <= 0.0 || ddr_admission_watermark_ >= 1.0)
             return false;
         double ratio = provider->getDdrUsedRatio(name);
         return ratio >= ddr_admission_watermark_;
     }
 
     double getSegmentSsdFreeRatio(
-        const std::string& name,
-        const SsdMetricsProvider* ssd_provider) const {
+        const std::string& name, const SsdMetricsProvider* ssd_provider) const {
         if (!ssd_provider) return 1.0;
         int64_t total = ssd_provider->getSsdTotalCapacity(name);
         if (total <= 0) return 1.0;
