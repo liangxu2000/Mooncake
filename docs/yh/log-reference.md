@@ -234,7 +234,7 @@ real_client::get_into
 | `select_us` | 副本选择耗时 |
 | `read_us` | 数据读取耗时（RDMA/文件IO/SSD RPC/scatter） |
 | `total_us` | 总耗时 |
-| `type` | 副本类型：`memory` / `local_disk` / `disk` / `unknown` |
+| `type` | 副本类型：`memory_local` / `memory_remote` / `local_disk_local` / `local_disk_remote` / `disk` / `unknown` |
 | `mode` | 读取模式：`full` 完整对象读取，`range` 部分读取，`unknown` 表示 metadata 阶段失败 |
 | `status` | 结果：`read_ok` / `mem_fail` / `disk_fail` / `ssd_fail` / 错误码字符串 |
 
@@ -415,6 +415,25 @@ store_py::put_batch
 PerfPoint 定义在 `mooncake-integration/store/mooncake_perf_points.def`。
 使用 `ubdiag show` 可查看实时性能数据，配合日志进行交叉分析。
 
+### 7.0 `get_into` / `batch_get_into` 与 `get_buffer` / `batch_get_buffer` 是否一致
+
+结论：**单 key 的 `get_into` 与 `get_buffer` 基本一致，批量的 `batch_get_into` 与 `batch_get_buffer` 还不完全一致。**
+
+单 key 路径中，`get_into_breakdown.type` 已经和 `get_breakdown.type` 一样细分为 `memory_local` / `memory_remote` / `local_disk_local` / `local_disk_remote` / `disk`。如果只看到 `memory` / `local_disk` / `disk` 三类，那是旧文档口径，不是当前源码口径。
+
+| 接口 | 入口日志 | 入口 PerfPoint | 汇总日志 | 子步骤对齐情况 |
+|------|----------|----------------|----------|----------------|
+| `get_buffer` | `get_buffer_start` | `GET_BUFFER_INTERNAL_FULL` | `get_breakdown` | `type` 细分 local/remote；有 `alloc_us` |
+| `get_into` | `get_into_start` | `GET_INTO_INTERNAL` | `get_into_breakdown` | `type` 细分 local/remote；没有独立 `alloc_us`，DISK/范围读临时 buffer 分配计入 `read_us` |
+| `batch_get_buffer` | `batch_get_buffer_start` | `GET_BATCH_BUFFER_INTERNAL_FULL` | `batch_get_breakdown` | `batch_get_ops` 合并 MEMORY + DISK，`ssd_offload_ops` 表示 LOCAL_DISK |
+| `batch_get_into` | `batch_get_into_start` | `GET_BATCH_INTO_INTERNAL` | `batch_get_into_breakdown` | `mem_ops` / `disk_ops` / `ssd_offload_ops` 拆开统计，比 `batch_get_buffer` 更细 |
+
+差异点：
+
+- `get_into` 的 replica type 现在与 `get_buffer` 一致，都是 local/remote 细分；文档已同步修正。
+- `get_into_breakdown` 没有 `alloc_us` 字段，因为它通常直接写入调用方 buffer；只有 DISK 或 range 读需要临时 CPU buffer，这部分耗时归入 `read_us`。
+- `batch_get_into_breakdown` 比 `batch_get_breakdown` 多拆了 `mem_ops` 和 `disk_ops`；而 `batch_get_breakdown` 用 `batch_get_ops` 合并 MEMORY + DISK。所以这两者目前不是完全一致口径。
+
 ### GET 侧
 
 | PerfPoint 名称 | 定义位置 | 标签 | 对应日志关键字 |
@@ -460,9 +479,9 @@ PerfPoint 定义在 `mooncake-integration/store/mooncake_perf_points.def`。
 | `GET_BATCH_BUFFER_INTERNAL` | store_py.cpp::get_batch | BatchGetBuffer | `batch_get_breakdown` |
 | `GET_BATCH_BUFFER_INTERNAL_FULL` | real_client.cpp::batch_get_buffer | BatchGetBufferInternal | `batch_get_breakdown` |
 | `GET_BATCH_INTERNAL_QUERY` | real_client.cpp::batch_get_buffer_internal | BatchQuery | `batch_query_result` |
-| `GET_BATCH_INTERNAL_PREPARATION` | real_client.cpp::batch_get_buffer_internal | Preparation | `batch_get_breakdown` prep_us |
-| `GET_BATCH_INTERNAL_SELECT_REPLICA` | real_client.cpp::batch_get_buffer_internal | SelectReplica | — |
-| `GET_BATCH_INTERNAL_ALLOC_BUFFER` | real_client.cpp::batch_get_buffer_internal | AllocBuffer | — |
+| `GET_BATCH_INTERNAL_PREPARATION` | real_client.cpp::batch_get_buffer_internal | Preparation | —（仅定义，当前未在源码中使用） |
+| `GET_BATCH_INTERNAL_SELECT_REPLICA` | real_client.cpp::batch_get_buffer_internal | SelectReplica | `batch_get_breakdown` prep_us（逐 key 汇总） |
+| `GET_BATCH_INTERNAL_ALLOC_BUFFER` | real_client.cpp::batch_get_buffer_internal | AllocBuffer | `batch_get_breakdown` prep_us（逐 key 汇总） |
 | `GET_BATCH_INTERNAL_SSD_READ` | real_client.cpp::batch_get_buffer_internal | SSDRead | `ssd_read_detail` |
 | `GET_BATCH_INTERNAL_MEMDISH_READ` | real_client.cpp::batch_get_buffer_internal | MemDiskRead | `batch_get_transfer_complete` |
 | `GET_BATCH_FULL` | client_service.cpp::BatchGet | TransferBatchGet | `batch_get_transfer_complete` |
@@ -479,8 +498,8 @@ PerfPoint 定义在 `mooncake-integration/store/mooncake_perf_points.def`。
 |----------------|---------|------|---------------|
 | `GET_BATCH_INTO_INTERNAL` | real_client.cpp::batch_get_into | BatchGetIntoInternal | `batch_get_into_breakdown` |
 | `GET_BATCH_INTO_INTERNAL_QUERY` | real_client.cpp::batch_get_into_internal | BatchQuery | `batch_get_into_query_result` |
-| `GET_BATCH_INTO_INTERNAL_SELECT_REPLICA` | real_client.cpp::batch_get_into_internal | SelectReplica | — |
-| `GET_BATCH_INTO_INTERNAL_ALLOC_BUFFER` | real_client.cpp::batch_get_into_internal | AllocBuffer | `batch_get_into_breakdown` read_us |
+| `GET_BATCH_INTO_INTERNAL_SELECT_REPLICA` | real_client.cpp::batch_get_into_internal | SelectReplica | `batch_get_into_breakdown` prep_us（逐 key 汇总） |
+| `GET_BATCH_INTO_INTERNAL_ALLOC_BUFFER` | real_client.cpp::batch_get_into_internal | AllocBuffer | `batch_get_into_breakdown` read_us（仅 DISK 临时 buffer） |
 | `GET_BATCH_INTO_INTERNAL_MEM_READ` | real_client.cpp::batch_get_into_internal | MemRead | `batch_get_transfer_complete` / `batch_get_into_breakdown` |
 | `GET_BATCH_INTO_INTERNAL_DISK_READ` | real_client.cpp::batch_get_into_internal | DiskRead | `DISK BatchGet failed` / `DISK scatter failed` |
 | `GET_BATCH_INTO_INTERNAL_SSD_READ` | real_client.cpp::batch_get_into_internal | SSDRead | `ssd_read_detail` / `Batch get store object failed` |
