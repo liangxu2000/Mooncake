@@ -275,7 +275,9 @@ void loadGlobalConfig(GlobalConfig& config) {
 
     const char* log_dir_path = std::getenv("MC_LOG_DIR");
     if (log_dir_path) {
-        google::InitGoogleLogging("mooncake-transfer-engine");
+        if (!google::IsGoogleLoggingInitialized()) {
+            google::InitGoogleLogging("mooncake-transfer-engine");
+        }
         if (opendir(log_dir_path) == NULL) {
             LOG(WARNING)
                 << "Path [" << log_dir_path
