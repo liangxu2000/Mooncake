@@ -784,7 +784,9 @@ int main(int argc, char* argv[]) {
     }
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    FLAGS_logtostderr = true;
+    if (std::getenv("MC_LOG_DIR") == nullptr) {
+        FLAGS_logtostderr = true;
+    }
 
     LOG(INFO) << "Mooncake Stress Cluster Benchmark";
     LOG(INFO) << "  Scenario:       " << FLAGS_scenario;
