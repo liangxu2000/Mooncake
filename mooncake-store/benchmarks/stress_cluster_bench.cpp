@@ -51,7 +51,9 @@ static void bindToSocket(int socket_id) {
     }
     numa_free_cpumask(cpu_list);
     if (nr_cpus > 0) {
-        sched_setaffinity(0, sizeof(cpu_set), &cpu_set);
+        if (sched_setaffinity(0, sizeof(cpu_set), &cpu_set) != 0) {
+            PLOG(WARNING) << "Failed to set CPU affinity for NUMA socket " << socket_id;
+        }
     }
 }
 
@@ -125,6 +127,25 @@ static std::vector<std::string> DiscoverSegmentsFromMaster(
     size_t header_end = response.find("\r\n\r\n");
     if (header_end == std::string::npos) {
         LOG(ERROR) << "Invalid HTTP response from master";
+        return segments;
+    }
+
+    std::string header = response.substr(0, header_end);
+    size_t status_pos = header.find(' ');
+    if (status_pos == std::string::npos) {
+        LOG(ERROR) << "Invalid HTTP response header from master";
+        return segments;
+    }
+    size_t status_code_start = status_pos + 1;
+    size_t status_code_end = header.find(' ', status_code_start);
+    if (status_code_end == std::string::npos) {
+        LOG(ERROR) << "Invalid HTTP status line from master";
+        return segments;
+    }
+    std::string status_code = header.substr(status_code_start, status_code_end - status_code_start);
+    if (status_code != "200") {
+        LOG(ERROR) << "HTTP request failed with status " << status_code
+                   << " from master at " << master_host << ":" << master_admin_port;
         return segments;
     }
 
@@ -673,7 +694,14 @@ class StressBenchmark {
 
     static std::string MakeSegmentKey(const std::string& segment,
                                       size_t idx) {
-        return "seg_" + segment + "_key_" + std::to_string(idx);
+        static const char* kSpecialChars = ".:-/\\[]{}()@#$%^&*+=|<>,;!?`'\"~";
+        std::string sanitized = segment;
+        for (char& c : sanitized) {
+            if (std::strchr(kSpecialChars, c) != nullptr || std::isspace(c)) {
+                c = '_';
+            }
+        }
+        return "seg_" + sanitized + "_key_" + std::to_string(idx);
     }
 
     int RunSegmentWrite() {
@@ -697,56 +725,52 @@ class StressBenchmark {
 
         LOG(INFO) << "=== SEGMENT WRITE MODE ===";
         LOG(INFO) << "Writing to " << segments.size() << " segments, "
-                  << FLAGS_num_keys << " keys per segment, each "
+                  << FLAGS_num_keys << " keys per segment (interleaved), each "
                   << FLAGS_value_size / MB << " MB";
+
+        std::vector<size_t> seg_written(segments.size(), 0);
+        std::vector<size_t> seg_failed(segments.size(), 0);
+        std::vector<mooncake::ReplicateConfig> configs(segments.size());
+        for (size_t s = 0; s < segments.size(); ++s) {
+            configs[s].replica_num = FLAGS_replica_num;
+            configs[s].with_hard_pin = FLAGS_hard_pin;
+            configs[s].preferred_segments = {segments[s]};
+        }
 
         size_t total_written = 0;
         size_t total_failed = 0;
 
-        for (size_t s = 0; s < segments.size(); ++s) {
-            const auto& segment = segments[s];
-            mooncake::ReplicateConfig config;
-            config.replica_num = FLAGS_replica_num;
-            config.with_hard_pin = FLAGS_hard_pin;
-            config.preferred_segments = {segment};
-
-            LOG(INFO) << "Writing to segment [" << s << "] " << segment
-                      << " (" << FLAGS_num_keys << " keys)...";
-
-            size_t seg_written = 0;
-            size_t seg_failed = 0;
-
-            for (size_t i = 0; i < FLAGS_num_keys; ++i) {
+        for (size_t i = 0; i < FLAGS_num_keys; ++i) {
+            for (size_t s = 0; s < segments.size(); ++s) {
+                const auto& segment = segments[s];
                 std::string key = MakeSegmentKey(segment, i);
                 FillBuffer(i);
 
                 auto t0 = Clock::now();
-                int ret =
-                    client_->put_from(key, buffer_, FLAGS_value_size, config);
+                int ret = client_->put_from(key, buffer_, FLAGS_value_size, configs[s]);
                 auto t1 = Clock::now();
 
                 if (ret != 0) {
                     LOG(ERROR) << "put_from failed for key=" << key
                                << " segment=" << segment << " ret=" << ret;
-                    ++seg_failed;
+                    ++seg_failed[s];
                     continue;
                 }
-                ++seg_written;
-
-                if ((i + 1) % 10 == 0 || i == FLAGS_num_keys - 1) {
-                    double elapsed_us = NanosToUs(ElapsedNanos(t0, t1));
-                    LOG(INFO) << "  Segment [" << s << "] " << segment
-                              << " written " << (i + 1) << "/"
-                              << FLAGS_num_keys
-                              << " last_latency=" << elapsed_us << " us";
-                }
+                ++seg_written[s];
             }
 
-            total_written += seg_written;
-            total_failed += seg_failed;
-            LOG(INFO) << "Segment [" << s << "] " << segment
-                      << " complete: " << seg_written << " succeeded, "
-                      << seg_failed << " failed";
+            if ((i + 1) % 10 == 0 || i == FLAGS_num_keys - 1) {
+                LOG(INFO) << "  Written " << (i + 1) << "/" << FLAGS_num_keys
+                          << " keys to all " << segments.size() << " segments";
+            }
+        }
+
+        for (size_t s = 0; s < segments.size(); ++s) {
+            total_written += seg_written[s];
+            total_failed += seg_failed[s];
+            LOG(INFO) << "Segment [" << s << "] " << segments[s]
+                      << " complete: " << seg_written[s] << " succeeded, "
+                      << seg_failed[s] << " failed";
         }
 
         LOG(INFO) << "All segments write complete: " << total_written
@@ -800,14 +824,6 @@ class StressBenchmark {
 
         int buf_ret = AllocateThreadBuffers(FLAGS_num_threads);
         if (buf_ret != 0) return buf_ret;
-
-        if (FLAGS_scenario == "remote_memory" ||
-            FLAGS_scenario == "remote_disk") {
-            LOG(INFO) << "Waiting " << FLAGS_wait_seconds
-                      << " seconds for writer to finish prefill...";
-            std::this_thread::sleep_for(
-                std::chrono::seconds(FLAGS_wait_seconds));
-        }
 
         std::vector<std::string> all_keys;
         for (size_t s = 0; s < read_segments.size(); ++s) {
@@ -896,31 +912,72 @@ class StressBenchmark {
         std::latch start_latch(static_cast<ptrdiff_t>(FLAGS_num_threads));
         std::vector<std::thread> threads;
 
+        size_t total_keys = all_keys.size();
+        size_t keys_per_thread =
+            (total_keys + FLAGS_num_threads - 1) / FLAGS_num_threads;
+
         for (size_t t = 0; t < FLAGS_num_threads; ++t) {
-            threads.emplace_back([&, t]() {
+            threads.emplace_back([&, t, keys_per_thread, total_keys]() {
                 bindToSocket(t % NR_SOCKETS);
                 char* my_buf = thread_buffers_[t].ptr;
 
                 start_latch.arrive_and_wait();
 
-                size_t key_idx = 0;
-                while (!stop_flag.load(std::memory_order_relaxed)) {
-                    const std::string& key = all_keys[key_idx % all_keys.size()];
-                    auto t0 = Clock::now();
-                    int64_t ret =
-                        client_->get_into(key, my_buf, FLAGS_value_size);
-                    auto t1 = Clock::now();
-                    (void)t0;
-                    (void)t1;
+                size_t key_offset = t * keys_per_thread;
+                size_t key_idx = key_offset;
 
-                    if (ret < 0) {
-                        global_failed.fetch_add(1, std::memory_order_relaxed);
-                    } else {
-                        global_bytes.fetch_add(static_cast<size_t>(ret),
-                                               std::memory_order_relaxed);
+                if (FLAGS_batch_size <= 1) {
+                    while (!stop_flag.load(std::memory_order_relaxed)) {
+                        const std::string& key =
+                            all_keys[key_idx % total_keys];
+                        int64_t ret =
+                            client_->get_into(key, my_buf, FLAGS_value_size);
+
+                        if (ret < 0) {
+                            global_failed.fetch_add(1,
+                                                    std::memory_order_relaxed);
+                        } else {
+                            global_bytes.fetch_add(static_cast<size_t>(ret),
+                                                   std::memory_order_relaxed);
+                        }
+                        global_ops.fetch_add(1, std::memory_order_relaxed);
+                        ++key_idx;
                     }
-                    global_ops.fetch_add(1, std::memory_order_relaxed);
-                    ++key_idx;
+                } else {
+                    size_t per_key_buf = FLAGS_value_size;
+                    while (!stop_flag.load(std::memory_order_relaxed)) {
+                        std::vector<std::string> keys;
+                        std::vector<void*> bufs;
+                        std::vector<size_t> sizes;
+                        keys.reserve(FLAGS_batch_size);
+                        bufs.reserve(FLAGS_batch_size);
+                        sizes.reserve(FLAGS_batch_size);
+
+                        for (size_t b = 0; b < FLAGS_batch_size; ++b) {
+                            const std::string& key =
+                                all_keys[key_idx % total_keys];
+                            keys.push_back(key);
+                            bufs.push_back(my_buf + b * per_key_buf);
+                            sizes.push_back(FLAGS_value_size);
+                            ++key_idx;
+                        }
+
+                        auto results =
+                            client_->batch_get_into(keys, bufs, sizes);
+
+                        for (size_t k = 0; k < results.size(); ++k) {
+                            if (results[k] < 0) {
+                                global_failed.fetch_add(
+                                    1, std::memory_order_relaxed);
+                            } else {
+                                global_bytes.fetch_add(
+                                    static_cast<size_t>(results[k]),
+                                    std::memory_order_relaxed);
+                            }
+                            global_ops.fetch_add(1,
+                                                 std::memory_order_relaxed);
+                        }
+                    }
                 }
             });
         }
@@ -1207,25 +1264,67 @@ class StressBenchmark {
         size_t failed = 0;
         size_t bytes = 0;
 
-        for (size_t i = 0; i < my_keys; ++i) {
-            size_t key_idx = key_offset + i;
-            const std::string& key = all_keys[key_idx % all_keys.size()];
+        if (FLAGS_batch_size <= 1) {
+            for (size_t i = 0; i < my_keys; ++i) {
+                size_t key_idx = key_offset + i;
+                const std::string& key = all_keys[key_idx % all_keys.size()];
 
-            auto t0 = Clock::now();
-            int64_t ret = client_->get_into(key, my_buf, FLAGS_value_size);
-            auto t1 = Clock::now();
+                auto t0 = Clock::now();
+                int64_t ret = client_->get_into(key, my_buf, FLAGS_value_size);
+                auto t1 = Clock::now();
 
-            int64_t lat_ns = ElapsedNanos(t0, t1);
+                int64_t lat_ns = ElapsedNanos(t0, t1);
 
-            if (ret < 0) {
-                ++failed;
-                LOG_EVERY_N(ERROR, 100)
-                    << "get_into failed key=" << key << " ret=" << ret;
-            } else {
-                bytes += static_cast<size_t>(ret);
+                if (ret < 0) {
+                    ++failed;
+                    LOG_EVERY_N(ERROR, 100)
+                        << "get_into failed key=" << key << " ret=" << ret;
+                } else {
+                    bytes += static_cast<size_t>(ret);
+                }
+                result.latencies_ns.push_back(lat_ns);
+                ++ops;
             }
-            result.latencies_ns.push_back(lat_ns);
-            ++ops;
+        } else {
+            size_t per_key_buf = FLAGS_value_size;
+            size_t i = 0;
+            while (i < my_keys) {
+                std::vector<std::string> keys;
+                std::vector<void*> bufs;
+                std::vector<size_t> sizes;
+                size_t batch_end = std::min(i + FLAGS_batch_size, my_keys);
+                keys.reserve(batch_end - i);
+                bufs.reserve(batch_end - i);
+                sizes.reserve(batch_end - i);
+
+                for (size_t j = i; j < batch_end; ++j) {
+                    size_t key_idx = key_offset + j;
+                    keys.push_back(all_keys[key_idx % all_keys.size()]);
+                    bufs.push_back(my_buf + (j - i) * per_key_buf);
+                    sizes.push_back(FLAGS_value_size);
+                }
+
+                auto t0 = Clock::now();
+                auto results = client_->batch_get_into(keys, bufs, sizes);
+                auto t1 = Clock::now();
+
+                int64_t lat_ns = ElapsedNanos(t0, t1);
+                result.latencies_ns.push_back(lat_ns);
+
+                for (size_t k = 0; k < results.size(); ++k) {
+                    if (results[k] < 0) {
+                        ++failed;
+                        LOG_EVERY_N(ERROR, 100)
+                            << "batch_get_into failed key=" << keys[k]
+                            << " ret=" << results[k];
+                    } else {
+                        bytes += static_cast<size_t>(results[k]);
+                    }
+                    ++ops;
+                }
+
+                i = batch_end;
+            }
         }
 
         result.total_bytes = bytes;

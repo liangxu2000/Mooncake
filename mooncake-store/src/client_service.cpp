@@ -1237,7 +1237,6 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
             results[i] = tl::unexpected(ErrorCode::LEASE_EXPIRED);
         }
     }
-
     auto us_batch_get = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - t0_batch_get)
                             .count();
@@ -1257,9 +1256,6 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
     for (const auto& r : results) {
         if (r.has_value()) num_success++;
     }
-    LOG(INFO) << "batch_get_transfer_complete num_keys[" << object_keys.size()
-              << "] success[" << num_success << "] elapsed_us[" << us_batch_get
-              << "] pending_count[" << pending_transfers.size() << "]";
 
     return results;
 }
