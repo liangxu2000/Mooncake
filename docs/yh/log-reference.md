@@ -855,13 +855,57 @@ submit_transfer_breakdown first_transfer[{0/1}] batch_id[{id}] request_count[{n}
 
 ---
 
-## 12. URMA 端建连日志
+## 12. URMA 端建连日志（第一次建立连接）
 
 来源：`mooncake-transfer-engine/src/transport/kunpeng_transport/urma/urma_endpoint.cpp`
 
-> **注意**：URMA 层日志使用原生 `LOG()`，**无 `trace_id` 前缀**。
+> **注意**：本节的 `*_breakdown` 日志用的是 `MC_LOG(INFO)`，**会带 `trace_id` 前缀**——主动端在握手时通过 `local_desc.trace_id = CurrentTraceId()` 把 trace_id 传给对端，所以一次建连的主动端和被动端日志可以用同一个 `trace_id` 串起来。少量纯状态日志（如 `"Connection has been established"`）仍是原生 `LOG()`，无 trace_id。
 
 记录 UB/URMA 传输端点的构建和建连过程各步骤耗时。
+
+### 12.0 先搞清楚：连接是什么时候建的、日志按什么顺序打
+
+**何时触发**：URMA 连接是**懒建立**的——`openSegment()` 只拿元数据，并不建连；直到第一次真正往某个 `peer_nic_path`（远端节点+网卡）提交传输时，worker 线程发现这个 endpoint 还没 connected，才触发建连。这也是为什么进程第一次传输某个对端时会有一段额外开销（对应 `first_transfer` / `first_wait` 字段的 `1`）。
+
+**建连分主动端（发起方）和被动端（响应方）两侧**，各自打不同的 breakdown 日志。把它们按发生顺序串起来，就是下面这张图——读真实日志时照着对号入座即可：
+
+```
+主动端 Node A                                   被动端 Node B
+（worker 发现 endpoint 未连）
+setupConnectionsByActive()  ← 计时起点 t0
+  │
+  ├─[情况①: peer_nic == 本机自己] 同节点直连，跳过握手，直接 doSetupConnection
+  │     → urma_active_setup_breakdown ... local_peer[1] handshake_us[0] ...   (§12.3 变体1)
+  │
+  └─[情况②: 跨节点] 需要握手
+       sendHandshake(local_desc{nic,jetty_num,trace_id})  ──RPC──▶  onSetupConnections()
+                                                                      setupConnectionsByPassive()
+                                                                        doSetupConnection()   ← 被动端也建
+                                                                          每个 jetty: import + bind
+                                                                          → urma_import_jetty_breakdown  (§12.6)
+                                                                          → urma_bind_jetty_breakdown    (§12.7)
+                                                                        → urma_do_setup_all_breakdown    (§12.5)
+                                                      ◀──返回 peer_desc{eid,jetty_num}──
+                                                                      → urma_passive_setup_breakdown     (§12.4)
+       ├─ 握手失败 → urma_active_setup_breakdown ... handshake_us[..] do_setup_us[0] status[err]  (§12.3 变体2)
+       └─ 握手成功 → doSetupConnection(peer_eid, peer_jetty_num)   ← 主动端建
+                       每个 jetty: import + bind
+                       → urma_import_jetty_breakdown   (§12.6)
+                       → urma_bind_jetty_breakdown     (§12.7)
+                     → urma_do_setup_all_breakdown     (§12.5)
+                   → urma_active_setup_breakdown ... local_peer[0] handshake_us[..] do_setup_us[..] status[0]  (§12.3 变体3)
+```
+
+**各日志在排查里的分工**（拿到一条慢建连日志时这样定位）：
+
+- `urma_active_setup_breakdown` 是**主动端的总账**：先看 `total_us` 判断这次建连慢不慢，再看是 `handshake_us`（握手 RPC 慢，多半是网络/对端响应慢）还是 `do_setup_us`（本地 import+bind 慢）占大头。
+- `urma_passive_setup_breakdown` 是**被动端的总账**：和主动端用同一 `trace_id` 配对，看对端响应那一侧花了多久。
+- `urma_do_setup_all_breakdown` 把一次 `doSetupConnection` 里**所有 jetty 的 import+bind 循环**汇总；想进一步拆到单个 jetty，再看 `urma_import_jetty_breakdown` / `urma_bind_jetty_breakdown`。
+- `urma_endpoint_construct_breakdown` / `urma_create_jetty_breakdown` 属于**更早的端点构建期**（创建 jetty 资源，发生在 init/首次用到该 context 时），不在每次建连路径上，但首次开销分析要一并看。
+
+> 想从代码角度理解这套握手/Jetty 绑定流程（`setupConnectionsByActive` → `sendHandshake` → `doSetupConnection` → `import/bind jetty`），见 `transfer-engine-deep-dive.md` 第 8 站与 `urma-transfer-engine-flow.md` 第 5 站。对应的 PerfPoint 打点见本手册 §545「UB/URMA 建连侧」（`UB_ENDPOINT_ACTIVE_SETUP` / `ACTIVE_HANDSHAKE` / `PASSIVE_SETUP` 等）。
+
+下面是每条日志的逐字段参考。
 
 ### 12.1 `urma_endpoint_construct_breakdown`
 
