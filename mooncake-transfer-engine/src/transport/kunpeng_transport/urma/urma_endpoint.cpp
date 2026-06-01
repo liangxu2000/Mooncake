@@ -19,6 +19,15 @@
 #include "transport/kunpeng_transport/urma/urma_endpoint.h"
 
 namespace mooncake {
+
+static urma_transport_mode_t parseTransMode(const std::string& mode) {
+    if (mode == "RC") return URMA_TM_RC;
+    if (mode == "UM") return URMA_TM_UM;
+    if (mode != "RM")
+        LOG(WARNING) << "Unknown MC_URMA_TRANS_MODE \"" << mode
+                     << "\", falling back to RM";
+    return URMA_TM_RM;
+}
 static int isNullEid(urma_eid_t* eid) {
     for (int i = 0; i < URMA_EID_SIZE; ++i) {
         if (eid->raw[i] != 0) return 0;
@@ -129,7 +138,7 @@ int UrmaContext::construct(GlobalConfig& config) {
         jfr_cfg[i].depth = 2048;
         jfr_cfg[i].flag.bs.tag_matching = URMA_NO_TAG_MATCHING;
         jfr_cfg[i].flag.bs.lock_free = 0;
-        jfr_cfg[i].trans_mode = URMA_TM_RM;
+        jfr_cfg[i].trans_mode = parseTransMode(globalConfig().urma_trans_mode);
         jfr_cfg[i].min_rnr_timer = URMA_TYPICAL_MIN_RNR_TIMER;
         jfr_cfg[i].token_value = urma_token;
         jfr_cfg[i].id = 0;
@@ -628,7 +637,7 @@ int UrmaEndpoint::construct(GlobalConfig& config) {
     }
     urma_jfs_cfg_t jfs_cfg = {
         .depth = 2048,            // DEFAULT_DEPTH (512)
-        .trans_mode = URMA_TM_RM, /* Reliable connection */
+        .trans_mode = parseTransMode(globalConfig().urma_trans_mode), /* override via MC_URMA_TRANS_MODE */
         .priority = 15,           // URMA_MAX_PRIORITY 15
         .max_sge = 5,             // SGE_NUM_MAX 5
         .rnr_retry = 7,           // URMA_TYPICAL_RNR_RETRY    7
@@ -668,8 +677,10 @@ int UrmaEndpoint::deconstruct() {
         auto imported_jetty = (imported_it != imported_jetty_map_.end())
                                   ? imported_it->second
                                   : nullptr;
-        ret = urma_unbind_jetty(jetty_list_[i]);
-        if (ret) PLOG(ERROR) << "Failed to unbind jetty";
+        if (parseTransMode(globalConfig().urma_trans_mode) == URMA_TM_RC) {
+            ret = urma_unbind_jetty(jetty_list_[i]);
+            if (ret) PLOG(ERROR) << "Failed to unbind jetty";
+        }
         if (imported_jetty != nullptr) {
             ret = urma_unimport_jetty(imported_jetty);
             if (ret) PLOG(ERROR) << "Failed to unimport jetty";
@@ -788,8 +799,10 @@ void UrmaEndpoint::disconnectUnlocked() {
         int ret = urma_modify_jetty(jetty_list_[i], &attr);
         if (ret) PLOG(ERROR) << "Failed to modify jetty to RESET";
         auto imported_jetty = imported_jetty_map_[jetty_list_[i]];
-        ret = urma_unbind_jetty(jetty_list_[i]);
-        if (ret) PLOG(ERROR) << "Failed to unbind jetty";
+        if (parseTransMode(globalConfig().urma_trans_mode) == URMA_TM_RC) {
+            ret = urma_unbind_jetty(jetty_list_[i]);
+            if (ret) PLOG(ERROR) << "Failed to unbind jetty";
+        }
         ret = urma_unimport_jetty(imported_jetty);
         if (ret) PLOG(ERROR) << "Failed to unimport jetty";
         // After resetting QP, the wr_depth_list_ won't change
@@ -984,24 +997,26 @@ int UrmaEndpoint::doSetupConnection(int jetty_index,
     urma_rjetty_t rjetty = {};
     rjetty.jetty_id.id = peer_jetty_num;
     rjetty.jetty_id.eid = eid;
-    rjetty.trans_mode = URMA_TM_RM;
+    rjetty.trans_mode = parseTransMode(globalConfig().urma_trans_mode);
     rjetty.type = URMA_JETTY;
     rjetty.tp_type = URMA_CTP;
     rjetty.flag.value = 0;
     LOG(INFO) << "Peer jetty id = " << peer_jetty_num;
     urma_target_jetty_t* imported_jetty =
         urma_import_jetty(context_->urma_context_, &rjetty, &urma_token);
-    urma_status_t ret = urma_bind_jetty(jetty, imported_jetty);
-    if (ret != URMA_SUCCESS && ret != URMA_EEXIST) {
-        std::string message = "Failed to bind jetty";
-        PLOG(ERROR) << "[Handshake] " << message;
-        if (reply_msg) *reply_msg = message + ": " + strerror(errno);
-        urma_unimport_jetty(imported_jetty);
-        return ERR_ENDPOINT;
+    if (parseTransMode(globalConfig().urma_trans_mode) == URMA_TM_RC) {
+        urma_status_t ret = urma_bind_jetty(jetty, imported_jetty);
+        if (ret != URMA_SUCCESS && ret != URMA_EEXIST) {
+            std::string message = "Failed to bind jetty";
+            PLOG(ERROR) << "[Handshake] " << message;
+            if (reply_msg) *reply_msg = message + ": " + strerror(errno);
+            urma_unimport_jetty(imported_jetty);
+            return ERR_ENDPOINT;
+        }
+        LOG(INFO) << "Bind jetty success, local jetty id:" << jetty->jetty_id.id
+                  << ", remote jetty id:" << peer_jetty_num;
     }
     imported_jetty_map_[jetty] = imported_jetty;
-    LOG(INFO) << "Bind jetty success, local jetty id:" << jetty->jetty_id.id
-              << ", remote jetty id:" << peer_jetty_num;
 
     return 0;
 }

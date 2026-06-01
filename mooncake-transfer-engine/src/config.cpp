@@ -408,6 +408,16 @@ void loadGlobalConfig(GlobalConfig& config) {
         }
     }
 
+    const char* urma_trans_mode_env = std::getenv("MC_URMA_TRANS_MODE");
+    if (urma_trans_mode_env && *urma_trans_mode_env) {
+        std::string val(urma_trans_mode_env);
+        if (val == "RM" || val == "RC" || val == "UM")
+            config.urma_trans_mode = val;
+        else
+            LOG(WARNING) << "Ignore value from environment variable "
+                            "MC_URMA_TRANS_MODE, it should be RM|RC|UM";
+    }
+
     const char* mlx5_qp_lag_port_balance_env =
         std::getenv("MC_MLX5_QP_LAG_PORT_BALANCE");
     if (mlx5_qp_lag_port_balance_env && *mlx5_qp_lag_port_balance_env) {
@@ -490,6 +500,7 @@ void dumpGlobalConfig() {
     }
     LOG(INFO) << "mlx5_qp_lag_port_balance = "
               << (config.mlx5_qp_lag_port_balance ? "true" : "false");
+    LOG(INFO) << "urma_trans_mode = " << config.urma_trans_mode;
 }
 
 GlobalConfig& globalConfig() {
