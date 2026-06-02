@@ -47,7 +47,7 @@ std::string LowerEnvValue(const char* value) {
 
 bool ParseLogEnabled() {
     const std::string value = LowerEnvValue(std::getenv("MC_LOG_ENABLE"));
-    if (value.empty()) return true;
+    if (value.empty()) return false;
     if (value == "off" || value == "0" || value == "false" ||
         value == "no") {
         return false;
@@ -193,6 +193,12 @@ bool ShouldLog(google::LogSeverity severity) {
 
 bool ShouldVLog(int level) {
     return IsMooncakeLogEnabled() && VLOG_IS_ON(level);
+}
+
+void ApplyMooncakeLogEnableToGlog() {
+    if (!IsMooncakeLogEnabled()) {
+        FLAGS_minloglevel = google::FATAL + 1;
+    }
 }
 
 ScopedTraceId::ScopedTraceId(uint64_t trace_id)

@@ -13,6 +13,7 @@ uint64_t CurrentTraceId();
 bool IsMooncakeLogEnabled();
 bool ShouldLog(google::LogSeverity severity);
 bool ShouldVLog(int level);
+void ApplyMooncakeLogEnableToGlog();
 
 class ScopedTraceId {
    public:

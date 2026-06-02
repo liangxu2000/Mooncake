@@ -17,8 +17,11 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
 #include <dirent.h>
 #include <sstream>
+#include <string>
 #include <unistd.h>
 
 namespace mooncake {
@@ -257,9 +260,13 @@ void loadGlobalConfig(GlobalConfig& config) {
     }
     FLAGS_minloglevel = config.log_level;
     const char* log_enable = std::getenv("MC_LOG_ENABLE");
-    if (log_enable &&
-        (strcmp(log_enable, "off") == 0 || strcmp(log_enable, "0") == 0 ||
-         strcmp(log_enable, "false") == 0 || strcmp(log_enable, "no") == 0)) {
+    std::string log_enable_value = log_enable ? log_enable : "";
+    std::transform(log_enable_value.begin(), log_enable_value.end(),
+                   log_enable_value.begin(),
+                   [](unsigned char ch) { return std::tolower(ch); });
+    if (log_enable_value.empty() || log_enable_value == "off" ||
+        log_enable_value == "0" || log_enable_value == "false" ||
+        log_enable_value == "no") {
         FLAGS_minloglevel = google::FATAL + 1;
     }
 

@@ -17,6 +17,7 @@
 
 #include "gflags/gflags.h"
 #include "glog/logging.h"
+#include "mooncake_logging.h"
 #include "real_client.h"
 
 namespace {
@@ -787,6 +788,7 @@ int main(int argc, char* argv[]) {
     if (std::getenv("MC_LOG_DIR") == nullptr) {
         FLAGS_logtostderr = true;
     }
+    mooncake::logging::ApplyMooncakeLogEnableToGlog();
 
     LOG(INFO) << "Mooncake Stress Cluster Benchmark";
     LOG(INFO) << "  Scenario:       " << FLAGS_scenario;
