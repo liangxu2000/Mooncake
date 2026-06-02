@@ -2619,7 +2619,14 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         return nullptr;
     }
 
-    auto t0 = std::chrono::steady_clock::now();
+    // The fine-grained timestamps below only feed the INFO breakdown log, so
+    // skip the steady_clock::now() calls entirely when INFO logging is off.
+    // Per-step latency is already recorded unconditionally by the ubdiag
+    // PerfPoints (GET_INTERNAL_QUERY/SELECT_REPLICA/ALLOC_BUFFER/...), which
+    // are unaffected by this gate.
+    const bool breakdown_log = mooncake::logging::ShouldLog(google::INFO);
+    auto t0 = breakdown_log ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
     auto t_query = t0, t_select = t0, t_alloc = t0;
     std::string replica_type;
 
@@ -2628,7 +2635,7 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
                                UbDiag::PerfLevel::MODULE);
     pt_query.Start();
     auto query_result = client_->Query(key);
-    t_query = std::chrono::steady_clock::now();
+    if (breakdown_log) t_query = std::chrono::steady_clock::now();
     pt_query.End(query_result ? 0 : -1);
     if (!query_result) {
         if (query_result.error() == ErrorCode::OBJECT_NOT_FOUND ||
@@ -2658,7 +2665,7 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     pt_select.Start();
     auto local_endpoints = client_->GetLocalEndpoints();
     const auto *best_replica = SelectBestReplica(replica_list, local_endpoints);
-    t_select = std::chrono::steady_clock::now();
+    if (breakdown_log) t_select = std::chrono::steady_clock::now();
     pt_select.End(best_replica ? 0 : -1);
     if (!best_replica) {
         MC_LOG(ERROR) << "No usable replica for key: " << key;
@@ -2697,7 +2704,7 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
                                UbDiag::PerfLevel::MODULE);
     pt_alloc.Start();
     auto alloc_result = client_buffer_allocator->allocate(total_length);
-    t_alloc = std::chrono::steady_clock::now();
+    if (breakdown_log) t_alloc = std::chrono::steady_clock::now();
     pt_alloc.End(alloc_result ? 0 : -1);
     if (!alloc_result) {
         MC_LOG(ERROR) << "Failed to allocate buffer for get_buffer, key: " << key;
@@ -2708,6 +2715,7 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         std::make_shared<BufferHandle>(std::move(*alloc_result));
 
     auto log_breakdown = [&](const char *status) {
+        if (!breakdown_log) return;
         auto now = std::chrono::steady_clock::now();
         auto query_us = std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0).count();
         auto select_us = std::chrono::duration_cast<std::chrono::microseconds>(t_select - t_query).count();

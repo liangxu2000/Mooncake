@@ -119,3 +119,47 @@ PERF_KEY_DEF(UB_ENDPOINT_PASSIVE_SETUP,      "urma_endpoint.cpp::setupConnection
 PERF_KEY_DEF(UB_ENDPOINT_DO_SETUP_ALL,       "urma_endpoint.cpp::doSetupConnection",                    "DoSetupAll")
 PERF_KEY_DEF(UB_ENDPOINT_IMPORT_JETTY,       "urma_endpoint.cpp::doSetupConnection",                    "ImportJetty")
 PERF_KEY_DEF(UB_ENDPOINT_BIND_JETTY,         "urma_endpoint.cpp::doSetupConnection",                    "BindJetty")
+
+// ============================================================
+// === Master 服务端打点（程序名 mooncake_master）           ===
+// ============================================================
+
+// --- P0: RPC 热路径（单 key，走 execute_rpc）---
+PERF_KEY_DEF(MASTER_RPC_PUT_START,        "rpc_service.cpp::PutStart",           "PutStart")
+PERF_KEY_DEF(MASTER_RPC_PUT_END,          "rpc_service.cpp::PutEnd",             "PutEnd")
+PERF_KEY_DEF(MASTER_RPC_PUT_REVOKE,       "rpc_service.cpp::PutRevoke",          "PutRevoke")
+PERF_KEY_DEF(MASTER_RPC_GET_REPLICA_LIST, "rpc_service.cpp::GetReplicaList",     "GetReplicaList")
+PERF_KEY_DEF(MASTER_RPC_EXIST_KEY,        "rpc_service.cpp::ExistKey",           "ExistKey")
+
+// --- P0: Batch get/put（手动插点，不走 execute_rpc）---
+PERF_KEY_DEF(MASTER_RPC_BATCH_PUT_START,  "rpc_service.cpp::BatchPutStart",      "BatchPutStart")
+PERF_KEY_DEF(MASTER_RPC_BATCH_PUT_END,    "rpc_service.cpp::BatchPutEnd",        "BatchPutEnd")
+PERF_KEY_DEF(MASTER_RPC_BATCH_PUT_REVOKE, "rpc_service.cpp::BatchPutRevoke",     "BatchPutRevoke")
+PERF_KEY_DEF(MASTER_RPC_BATCH_GET_REPLICA,"rpc_service.cpp::BatchGetReplicaList","BatchGetReplicaList")
+
+// --- P1: 次热路径（走 execute_rpc）---
+PERF_KEY_DEF(MASTER_RPC_UPSERT_START,     "rpc_service.cpp::UpsertStart",        "UpsertStart")
+PERF_KEY_DEF(MASTER_RPC_UPSERT_END,       "rpc_service.cpp::UpsertEnd",          "UpsertEnd")
+PERF_KEY_DEF(MASTER_RPC_UPSERT_REVOKE,    "rpc_service.cpp::UpsertRevoke",       "UpsertRevoke")
+PERF_KEY_DEF(MASTER_RPC_REMOVE,           "rpc_service.cpp::Remove",             "Remove")
+PERF_KEY_DEF(MASTER_RPC_REMOVE_BY_REGEX,  "rpc_service.cpp::RemoveByRegex",      "RemoveByRegex")
+PERF_KEY_DEF(MASTER_RPC_MOUNT_SEGMENT,    "rpc_service.cpp::MountSegment",       "MountSegment")
+PERF_KEY_DEF(MASTER_RPC_UNMOUNT_SEGMENT,  "rpc_service.cpp::UnmountSegment",     "UnmountSegment")
+PERF_KEY_DEF(MASTER_RPC_COPY_START,       "rpc_service.cpp::CopyStart",          "CopyStart")
+PERF_KEY_DEF(MASTER_RPC_COPY_END,         "rpc_service.cpp::CopyEnd",            "CopyEnd")
+PERF_KEY_DEF(MASTER_RPC_COPY_REVOKE,      "rpc_service.cpp::CopyRevoke",         "CopyRevoke")
+PERF_KEY_DEF(MASTER_RPC_PING,             "rpc_service.cpp::Ping",               "Ping")
+
+// --- RPC 内部子步骤 ---
+PERF_KEY_DEF(MASTER_PUT_ALLOCATE_MEM,     "master_service.cpp::AllocateAndInsertMetadata", "AllocateMemory")
+PERF_KEY_DEF(MASTER_PUT_ALLOCATE_NOF,     "master_service.cpp::AllocateAndInsertMetadata", "AllocateNoF")
+PERF_KEY_DEF(MASTER_PUT_SHARD_LOCK,       "master_service.cpp::PutStart",        "AcquireShardLock")
+PERF_KEY_DEF(MASTER_SNAPSHOT_LOCK,        "master_service.cpp::SnapshotThreadFunc", "AcquireSnapshotLock")
+
+// --- 后台线程 ---
+PERF_KEY_DEF(MASTER_BG_BATCH_EVICT,       "master_service.cpp::BatchEvict",          "BatchEvict")
+PERF_KEY_DEF(MASTER_BG_NOF_BATCH_EVICT,   "master_service.cpp::NoFBatchEvict",       "NoFBatchEvict")
+PERF_KEY_DEF(MASTER_BG_DISCARD_EXPIRED,   "master_service.cpp::EvictionThreadFunc",  "DiscardExpired")
+PERF_KEY_DEF(MASTER_BG_SNAPSHOT_PERSIST,  "master_service.cpp::SnapshotThreadFunc",  "SnapshotPersist")
+PERF_KEY_DEF(MASTER_BG_CLIENT_MONITOR,    "master_service.cpp::ClientMonitorFunc",   "ClientMonitorScan")
+PERF_KEY_DEF(MASTER_BG_CLIENT_UNMOUNT,    "master_service.cpp::ClientMonitorFunc",   "ExpiredClientUnmount")
