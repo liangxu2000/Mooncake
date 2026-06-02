@@ -1187,8 +1187,7 @@ int UrmaEndpoint::doSetupConnection(int jetty_index,
     imported_jetty_map_[jetty] = imported_jetty;
     MC_LOG(INFO) << "urma_bind_jetty_breakdown index[" << jetty_index
                  << "] local_jetty_id[" << jetty->jetty_id.id
-                 << "] peer_jetty_id[" << peer_jetty_num << "] bind_us["
-                 << bind_us << "] status[0]";
+                 << "] peer_jetty_id[" << peer_jetty_num << "] status[0]";
 
     return 0;
 }
