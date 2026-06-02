@@ -85,6 +85,10 @@ struct GlobalConfig {
     uint64_t max_seg_size = 0x10000000000;
     size_t max_jfc_e = 4096;  // urma is temporarily using this default value.
     size_t num_jetty_per_ep = 1;
+    // urma transport mode: "RM" (default), "RC", "UM"; override via MC_URMA_TRANS_MODE
+    std::string urma_trans_mode = "RM";
+    // enable bonding BALANCE+PORT mode; default off (STANDALONE); override via MC_URMA_BONDING_BALANCE
+    bool urma_bonding_balance = false;
 };
 
 struct RpcCommunicatorConfig {

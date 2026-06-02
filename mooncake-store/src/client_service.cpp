@@ -932,13 +932,6 @@ tl::expected<void, ErrorCode> Client::Get(const std::string& object_key,
         MC_LOG(ERROR) << "transfer_read_failed key=" << object_key;
         return tl::unexpected(err);
     }
-
-    size_t data_size = 0;
-    for (const auto &s : slices) data_size += s.size;
-    MC_LOG(INFO) << "transfer_read_completed key[" << object_key << "] elapsed_us[" << us_get
-              << "] data_size[" << data_size
-              << "] cache_hit[" << (cache_used ? 1 : 0) << "]";
-
     // Frequency admission: only promote frequently accessed keys to hot cache.
     // Skip when cache_used 鈥?data was already served from local cache, no need
     // to re-promote or increment the CMS counter.
@@ -1289,7 +1282,6 @@ std::vector<tl::expected<void, ErrorCode>> Client::BatchGet(
             results[i] = tl::unexpected(ErrorCode::LEASE_EXPIRED);
         }
     }
-
     auto us_batch_get = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - t0_batch_get)
                             .count();
@@ -1383,8 +1375,6 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
         return tl::unexpected(err);
     }
 
-    MC_LOG(INFO) << "put_start_success key[" << key << "] replicas[" << start_result.value().size() << "]";
-
     // Record Put transfer latency (all replicas)
     auto t0_put = std::chrono::steady_clock::now();
 
@@ -1453,12 +1443,6 @@ tl::expected<void, ErrorCode> Client::Put(const ObjectKey& key,
         pt_full.End(-1);
         return tl::unexpected(err);
     }
-
-    size_t data_size = 0;
-    for (const auto &s : slices) data_size += s.size;
-    MC_LOG(INFO) << "put_end_success key[" << key << "] transfer_us[" << us_put
-              << "] data_size[" << data_size << "]";
-
     pt_full.End(0);
     return {};
 }
