@@ -196,9 +196,8 @@ bool ShouldVLog(int level) {
 }
 
 void ApplyMooncakeLogEnableToGlog() {
-    if (!IsMooncakeLogEnabled()) {
-        FLAGS_minloglevel = google::FATAL + 1;
-    }
+    // MC_LOG_ENABLE only controls MC_LOG macros via ShouldLog().
+    // Do not touch FLAGS_minloglevel to avoid suppressing other LOG() calls.
 }
 
 ScopedTraceId::ScopedTraceId(uint64_t trace_id)
