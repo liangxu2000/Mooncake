@@ -73,19 +73,19 @@ Client::Client(const std::string& local_hostname,
       pinned_buffer_pool_(std::make_unique<PinnedBufferPool>()),
       write_thread_pool_(2),
       task_thread_pool_(4) {
-    MC_LOG(INFO) << "client_id=" << client_id_;
+    LOG(INFO) << "client_id=" << client_id_;
 
     if (metrics_) {
         if (metrics_->GetReportingInterval() > 0) {
-            MC_LOG(INFO) << "Client metrics enabled with reporting thread started "
+            LOG(INFO) << "Client metrics enabled with reporting thread started "
                          "(interval: "
                       << metrics_->GetReportingInterval() << "s)";
         } else {
-            MC_LOG(INFO)
+            LOG(INFO)
                 << "Client metrics enabled but reporting disabled (interval=0)";
         }
     } else {
-        MC_LOG(INFO) << "Client metrics disabled (set MC_STORE_CLIENT_METRIC=1 to "
+        LOG(INFO) << "Client metrics disabled (set MC_STORE_CLIENT_METRIC=1 to "
                      "enable)";
     }
 }
@@ -182,10 +182,10 @@ static std::optional<bool> get_auto_discover() {
     if (ev_ad) {
         int iv = std::stoi(ev_ad);
         if (iv == 1) {
-            MC_LOG(INFO) << "auto discovery set by env MC_MS_AUTO_DISC";
+            LOG(INFO) << "auto discovery set by env MC_MS_AUTO_DISC";
             return true;
         } else if (iv == 0) {
-            MC_LOG(INFO) << "auto discovery not set by env MC_MS_AUTO_DISC";
+            LOG(INFO) << "auto discovery not set by env MC_MS_AUTO_DISC";
             return false;
         } else {
             MC_LOG(WARNING)
@@ -213,7 +213,7 @@ static std::vector<std::string> get_auto_discover_filters() {
     std::vector<std::string> whitelst_filters;
     char* ev_ad = std::getenv("MC_MS_FILTERS");
     if (ev_ad) {
-        MC_LOG(INFO) << "whitelist filters: " << ev_ad;
+        LOG(INFO) << "whitelist filters: " << ev_ad;
         char delimiter = ',';
         char* end = ev_ad + std::strlen(ev_ad);
         char *start = ev_ad, *pos = ev_ad;
@@ -431,7 +431,7 @@ ErrorCode Client::InitTransferEngine(
             // Enable auto-discover for RDMA if no devices are specified
             if ((protocol == "rdma" || protocol == "efa") &&
                 !device_names.has_value()) {
-                MC_LOG(INFO)
+                LOG(INFO)
                     << "Set auto discovery ON by default for RDMA protocol, "
                        "since no "
                        "device names provided";
@@ -442,7 +442,7 @@ ErrorCode Client::InitTransferEngine(
 
         // Honor filters when auto-discovery is enabled; otherwise warn once
         if (auto_discover) {
-            MC_LOG(INFO)
+            LOG(INFO)
                 << "Transfer engine auto discovery is enabled for protocol: "
                 << protocol;
             auto filters = get_auto_discover_filters();
@@ -475,10 +475,10 @@ ErrorCode Client::InitTransferEngine(
     // TENT mode: Skip manual transport installation - TENT handles this
     // internally
     if (use_tent) {
-        MC_LOG(INFO)
+        LOG(INFO)
             << "Using TENT mode - transport configuration handled internally";
         if (device_names.has_value()) {
-            MC_LOG(INFO)
+            LOG(INFO)
                 << "Note: device_names parameter is ignored in TENT mode. "
                 << "Configure devices via TENT config file or environment "
                    "variables.";
@@ -487,7 +487,7 @@ ErrorCode Client::InitTransferEngine(
     }
 
     if (!auto_discover) {
-        MC_LOG(INFO) << "Transfer engine auto discovery is disabled for protocol: "
+        LOG(INFO) << "Transfer engine auto discovery is disabled for protocol: "
                   << protocol;
 
         Transport* transport = nullptr;
@@ -499,7 +499,7 @@ ErrorCode Client::InitTransferEngine(
                 return ErrorCode::INVALID_PARAMS;
             }
 
-            MC_LOG(INFO) << "Using specified RDMA devices: "
+            LOG(INFO) << "Using specified RDMA devices: "
                       << device_names.value();
 
             std::vector<std::string> devices =
@@ -509,7 +509,7 @@ ErrorCode Client::InitTransferEngine(
             auto topology = transfer_engine_->getLocalTopology();
             if (topology) {
                 topology->discover(devices);
-                MC_LOG(INFO) << "Topology discovery complete with specified "
+                LOG(INFO) << "Topology discovery complete with specified "
                              "devices. Found "
                           << topology->getHcaList().size() << " HCAs";
             }
@@ -634,7 +634,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
         if (!response) {
             MC_LOG(ERROR) << "Failed to get fsdir from master";
         } else if (response.value().empty()) {
-            MC_LOG(INFO)
+            LOG(INFO)
                 << "Storage root directory is not set. persisting data is "
                    "disabled.";
         } else {
@@ -643,8 +643,8 @@ std::optional<std::shared_ptr<Client>> Client::Create(
             if (pos != std::string::npos) {
                 std::string storage_root_dir = dir_string.substr(0, pos);
                 std::string fs_subdir = dir_string.substr(pos + 1);
-                MC_LOG(INFO) << "Storage root directory is: " << storage_root_dir;
-                MC_LOG(INFO) << "Fs subdir is: " << fs_subdir;
+                LOG(INFO) << "Storage root directory is: " << storage_root_dir;
+                LOG(INFO) << "Fs subdir is: " << fs_subdir;
                 // Initialize storage backend with default eviction settings
                 client->PrepareStorageBackend(storage_root_dir, fs_subdir, true,
                                               0);
@@ -655,7 +655,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
     } else {
         auto config = config_response.value();
         if (config.fsdir.empty()) {
-            MC_LOG(INFO)
+            LOG(INFO)
                 << "Storage root directory is not set. persisting data is "
                    "disabled.";
         } else {
@@ -663,11 +663,11 @@ std::optional<std::shared_ptr<Client>> Client::Create(
             if (pos != std::string::npos) {
                 std::string storage_root_dir = config.fsdir.substr(0, pos);
                 std::string fs_subdir = config.fsdir.substr(pos + 1);
-                MC_LOG(INFO) << "Storage root directory is: " << storage_root_dir;
-                MC_LOG(INFO) << "Fs subdir is: " << fs_subdir;
-                MC_LOG(INFO) << "Disk eviction enabled: "
+                LOG(INFO) << "Storage root directory is: " << storage_root_dir;
+                LOG(INFO) << "Fs subdir is: " << fs_subdir;
+                LOG(INFO) << "Disk eviction enabled: "
                           << config.enable_disk_eviction;
-                MC_LOG(INFO) << "Quota bytes: " << config.quota_bytes;
+                LOG(INFO) << "Quota bytes: " << config.quota_bytes;
                 // Initialize storage backend with config from master
                 client->PrepareStorageBackend(storage_root_dir, fs_subdir,
                                               config.enable_disk_eviction,
@@ -681,8 +681,8 @@ std::optional<std::shared_ptr<Client>> Client::Create(
 
     // this only performs RPC calls
     if (protocol == "rpc_only") {
-        MC_LOG(INFO) << "Use rpc only. Skip initializing transfer engine.";
-        MC_LOG(INFO) << "client_create_breakdown protocol[" << protocol
+        LOG(INFO) << "Use rpc only. Skip initializing transfer engine.";
+        LOG(INFO) << "client_create_breakdown protocol[" << protocol
                      << "] connect_master_us["
                      << std::chrono::duration_cast<std::chrono::microseconds>(
                             connect_end - connect_start)
@@ -713,7 +713,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
         }
     } else {
         client->transfer_engine_ = transfer_engine;
-        MC_LOG(INFO) << "Use existing transfer engine instance. Skip its "
+        LOG(INFO) << "Use existing transfer engine instance. Skip its "
                      "initialization.";
     }
     const auto init_engine_end = std::chrono::steady_clock::now();
@@ -727,7 +727,7 @@ std::optional<std::shared_ptr<Client>> Client::Create(
         MC_LOG(ERROR) << "Failed to initialize local hot cache";
     }
 
-    MC_LOG(INFO) << "client_create_breakdown protocol[" << protocol
+    LOG(INFO) << "client_create_breakdown protocol[" << protocol
                  << "] connect_master_us["
                  << std::chrono::duration_cast<std::chrono::microseconds>(
                         connect_end - connect_start)
@@ -3433,7 +3433,7 @@ void Client::StorageHeartbeatThreadMain() {
                 continue;
             }
 
-            MC_LOG(INFO) << "Reconnected to master " << next_view.leader_address;
+            LOG(INFO) << "Reconnected to master " << next_view.leader_address;
             ping_fail_count = 0;
         } else {
             const std::string current_master_address = direct_master_address_;
@@ -3448,7 +3448,7 @@ void Client::StorageHeartbeatThreadMain() {
                     std::chrono::milliseconds(fail_ping_interval_ms));
                 continue;
             }
-            MC_LOG(INFO) << "Reconnected to master " << current_master_address;
+            LOG(INFO) << "Reconnected to master " << current_master_address;
             last_ping_success_.store(true);
             ping_fail_count = 0;
         }
@@ -3600,7 +3600,7 @@ ErrorCode Client::InitLocalHotCache() {
             admission_sketch_.reset();
             return ErrorCode::INVALID_PARAMS;
         }
-        MC_LOG(INFO) << "Local hot cache enabled with cache size=" << total_cache
+        LOG(INFO) << "Local hot cache enabled with cache size=" << total_cache
                   << ", block size=" << block_size
                   << ", block amount=" << hot_cache_->GetCacheSize()
                   << ", shm=" << (use_shm ? "on" : "off");
