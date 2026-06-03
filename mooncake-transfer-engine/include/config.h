@@ -87,8 +87,10 @@ struct GlobalConfig {
     size_t num_jetty_per_ep = 1;
     // urma transport mode: "RM" (default), "RC", "UM"; override via MC_URMA_TRANS_MODE
     std::string urma_trans_mode = "RM";
-    // enable bonding BALANCE+PORT mode; default off (STANDALONE); override via MC_URMA_BONDING_BALANCE
+        // enable bonding BALANCE+PORT mode; default off (STANDALONE); override via MC_URMA_BONDING_BALANCE
     bool urma_bonding_balance = false;
+    // enable bonding multipath mode; default off (STANDALONE); override via MC_URMA_BONDING_MULTIPATH_ENABLE
+    bool urma_bonding_multipath = false;
 };
 
 struct RpcCommunicatorConfig {

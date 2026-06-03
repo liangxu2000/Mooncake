@@ -433,21 +433,21 @@ int UrmaContext::openDevice(const std::string& device_name, uint8_t port,
             urma_free_device_list(devices);
             return ERR_CONTEXT;
         }
-        // if (globalConfig().urma_bonding_balance) {
-        //     LOG(INFO) << "Try change binding mode balance";
-        //     bondp_set_bonding_mode_in_t mode{ .bonding_mode = BONDP_BONDING_MODE_BALANCE,
-        //                                       .bonding_level = BONDP_BONDING_LEVEL_PORT };
-        //     urma_user_ctl_in_t in{ .addr = reinterpret_cast<uint64_t>(&mode),
-        //                            .len = sizeof(mode),
-        //                            .opcode = BONDP_USER_CTL_SET_BONDING_MODE };
-        //     urma_user_ctl_out_t out;
-        //     memset(&out, 0, sizeof(out));
-        //     auto ret = urma_user_ctl(context, &in, &out);
-        //     if (ret != URMA_SUCCESS) {
-        //         LOG(ERROR) << "Failed to set bonding balance mode, ret = " << ret;
-        //         return ERR_CONTEXT;
-        //     }
-        // }
+        if (globalConfig().urma_bonding_multipath) {
+            LOG(INFO) << "Try change binding mode balance";
+            bondp_set_bonding_mode_in_t mode{ .bonding_mode = BONDP_BONDING_MODE_STANDALONE,
+                                              .bonding_level = BONDP_BONDING_LEVEL_IODIE };
+            urma_user_ctl_in_t in{ .addr = reinterpret_cast<uint64_t>(&mode),
+                                   .len = sizeof(mode),
+                                   .opcode = BONDP_USER_CTL_SET_BONDING_MODE };
+            urma_user_ctl_out_t out;
+            memset(&out, 0, sizeof(out));
+            auto ret = urma_user_ctl(context, &in, &out);
+            if (ret != URMA_SUCCESS) {
+                LOG(ERROR) << "Failed to set bonding balance mode, ret = " << ret;
+                return ERR_CONTEXT;
+            }
+        }
         ret = urma_query_device(devices[i], &dev_attr_);
         if (ret) {
             PLOG(ERROR) << "Failed to query dev attr( " << device_name << " ) ";
