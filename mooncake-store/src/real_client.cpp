@@ -941,7 +941,7 @@ tl::expected<void, ErrorCode> RealClient::setup_internal(
             return tl::unexpected(ErrorCode::INTERNAL_ERROR);
         }
         offload_rpc_port_ = offload_rpc_server_->port();
-        MC_LOG(INFO) << "Offload RPC server started on port " << offload_rpc_port_;
+        LOG(INFO) << "Offload RPC server started on port " << offload_rpc_port_;
 
         // Build local_rpc_addr from hostname + auto-allocated port
         std::string rpc_host = this->local_hostname;
@@ -1690,7 +1690,7 @@ int RealClient::start_http_server() {
         http_server_.reset();
         return -1;
     }
-    MC_LOG(INFO) << "Client HTTP server started on port " << FLAGS_http_port;
+    LOG(INFO) << "Client HTTP server started on port " << FLAGS_http_port;
     return 0;
 }
 
@@ -5772,7 +5772,7 @@ void RealClient::ipc_server_func() {
         return;
     }
 
-    MC_LOG(INFO) << "IPC server is listening";
+    LOG(INFO) << "IPC server is listening";
 
     while (ipc_running_) {
         int client_sock = accept(server_sock, nullptr, nullptr);

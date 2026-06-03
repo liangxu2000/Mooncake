@@ -508,7 +508,7 @@ auto MasterService::MountNoFSegment(const NoFSegment& segment,
     ScopedNoFSegmentAccess nof_segment_access =
         nof_segment_manager_.getNoFSegmentAccess();
 
-    MC_LOG(INFO) << "NoF segment mount: " << "client_id=" << client_id
+    LOG(INFO) << "NoF segment mount: " << "client_id=" << client_id
               << ", action=mount_segment, segment_name=" << segment.name;
 
     auto err = nof_segment_access.MountSegment(segment, client_id);
@@ -752,7 +752,7 @@ void MasterService::ClearInvalidHandles(
 }
 
 void MasterService::TaskCleanupThreadFunc() {
-    MC_LOG(INFO) << "Task cleanup thread started";
+    LOG(INFO) << "Task cleanup thread started";
     while (task_cleanup_running_) {
         // Wait for the next cleanup interval, but allow fast shutdown.
         {
@@ -771,7 +771,7 @@ void MasterService::TaskCleanupThreadFunc() {
         write_access.prune_expired_tasks();
         write_access.prune_finished_tasks();
     }
-    MC_LOG(INFO) << "Task cleanup thread stopped";
+    LOG(INFO) << "Task cleanup thread stopped";
 }
 
 auto MasterService::UnmountSegment(const UUID& segment_id,
@@ -3795,7 +3795,7 @@ uint64_t MasterService::ReleaseExpiredDiscardedReplicas(
 }
 
 void MasterService::SnapshotThreadFunc() {
-    MC_LOG(INFO) << "[Snapshot] snapshot_thread started";
+    LOG(INFO) << "[Snapshot] snapshot_thread started";
     while (snapshot_running_) {
         std::this_thread::sleep_for(
             std::chrono::seconds(snapshot_interval_seconds_));
@@ -3890,7 +3890,7 @@ void MasterService::SnapshotThreadFunc() {
             pt_snap.End(0);
         }
     }
-    MC_LOG(INFO) << "[Snapshot] snapshot_thread stopped";
+    LOG(INFO) << "[Snapshot] snapshot_thread stopped";
 }
 
 void MasterService::WaitForSnapshotChild(pid_t pid,
@@ -4624,7 +4624,7 @@ bool MasterService::TryRestoreStateFromSnapshot(
                            << save_result.error();
             }
         }
-        MC_LOG(INFO) << "[Restore] Download metadata file success";
+        LOG(INFO) << "[Restore] Download metadata file success";
 
         std::string segments_path = path_prefix + SNAPSHOT_SEGMENTS_FILE;
         std::vector<uint8_t> segments_content;
@@ -4645,7 +4645,7 @@ bool MasterService::TryRestoreStateFromSnapshot(
                            << save_result.error();
             }
         }
-        MC_LOG(INFO) << "[Restore] Download segments file success";
+        LOG(INFO) << "[Restore] Download segments file success";
 
         std::string task_manager_path =
             path_prefix + SNAPSHOT_TASK_MANAGER_FILE;
@@ -4680,7 +4680,7 @@ bool MasterService::TryRestoreStateFromSnapshot(
                             static_cast<int>(segments_result.error().code),
                             segments_result.error().message));
         }
-        MC_LOG(INFO) << "[Restore] Deserialize segments success";
+        LOG(INFO) << "[Restore] Deserialize segments success";
 
         auto metadata_result =
             metadata_serializer.Deserialize(metadata_content);
@@ -4690,7 +4690,7 @@ bool MasterService::TryRestoreStateFromSnapshot(
                             static_cast<int>(metadata_result.error().code),
                             metadata_result.error().message));
         }
-        MC_LOG(INFO) << "[Restore] Deserialize metadata success";
+        LOG(INFO) << "[Restore] Deserialize metadata success";
 
         auto task_manager_result =
             task_manager_serializer.Deserialize(task_manager_content);

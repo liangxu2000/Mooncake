@@ -259,16 +259,8 @@ void loadGlobalConfig(GlobalConfig& config) {
             config.log_level = google::ERROR;
     }
     FLAGS_minloglevel = config.log_level;
-    const char* log_enable = std::getenv("MC_LOG_ENABLE");
-    std::string log_enable_value = log_enable ? log_enable : "";
-    std::transform(log_enable_value.begin(), log_enable_value.end(),
-                   log_enable_value.begin(),
-                   [](unsigned char ch) { return std::tolower(ch); });
-    if (log_enable_value.empty() || log_enable_value == "off" ||
-        log_enable_value == "0" || log_enable_value == "false" ||
-        log_enable_value == "no") {
-        FLAGS_minloglevel = google::FATAL + 1;
-    }
+    // MC_LOG_ENABLE only controls MC_LOG macros via ShouldLog().
+    // Do not suppress FLAGS_minloglevel here to avoid affecting other LOG() calls.
 
     const char* slice_timeout_env = std::getenv("MC_SLICE_TIMEOUT");
     if (slice_timeout_env) {

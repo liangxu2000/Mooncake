@@ -694,7 +694,7 @@ int UrmaEndpoint::construct(GlobalConfig& config) {
             pt_construct.End(-1);
             return ERR_ENDPOINT;
         }
-        MC_LOG(INFO) << "Create jetty success, jetty id = "
+        LOG(INFO) << "Create jetty success, jetty id = "
                      << jetty_list_[i]->jetty_id.id << " ,jetty jfc id = "
                      << jetty_list_[i]->jetty_cfg.jfs_cfg.jfc->jfc_id.id
                      << " : " << jfc->jfc_id.id;
@@ -1143,7 +1143,7 @@ int UrmaEndpoint::doSetupConnection(int jetty_index,
     rjetty.type = URMA_JETTY;
     rjetty.tp_type = URMA_CTP;
     rjetty.flag.value = 0;
-    MC_LOG(INFO) << "Peer jetty id = " << peer_jetty_num;
+    LOG(INFO) << "Peer jetty id = " << peer_jetty_num;
     auto t_import_start = std::chrono::steady_clock::now();
     UbDiag::PerfPoint pt_import(PerfKey::UB_ENDPOINT_IMPORT_JETTY,
                                 UbDiag::PerfLevel::DEBUG);
@@ -1180,7 +1180,7 @@ int UrmaEndpoint::doSetupConnection(int jetty_index,
                 urma_unimport_jetty(imported_jetty);
                 return ERR_ENDPOINT;
             }
-        MC_LOG(INFO) << "Bind jetty success, local jetty id:"
+        LOG(INFO) << "Bind jetty success, local jetty id:"
                 << jetty->jetty_id.id
                     << ", remote jetty id:" << peer_jetty_num
                     << "] bind_us[" << bind_us;
