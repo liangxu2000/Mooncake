@@ -2641,12 +2641,13 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         return nullptr;
     }
 
-    // The fine-grained timestamps below only feed the INFO breakdown log, so
-    // skip the steady_clock::now() calls entirely when INFO logging is off.
-    // Per-step latency is already recorded unconditionally by the ubdiag
-    // PerfPoints (GET_INTERNAL_QUERY/SELECT_REPLICA/ALLOC_BUFFER/...), which
-    // are unaffected by this gate.
-    const bool breakdown_log = mooncake::logging::ShouldLog(google::INFO);
+    // The fine-grained timestamps below only feed the breakdown log, so skip
+    // the steady_clock::now() calls entirely when this request is not sampled.
+    // One dice roll per request (MC_HIFREQ_LOG_SAMPLE_RATE, default 0.1) gates
+    // both the timing capture and the breakdown emission.  Per-step latency is
+    // still recorded unconditionally by the ubdiag PerfPoints
+    // (GET_INTERNAL_QUERY/SELECT_REPLICA/ALLOC_BUFFER/...), unaffected by this.
+    const bool breakdown_log = mooncake::logging::ShouldSampleHiFreqLog();
     auto t0 = breakdown_log ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
     auto t0_wall = breakdown_log ? std::chrono::system_clock::now()
@@ -3009,8 +3010,13 @@ RealClient::batch_get_buffer_internal(
         return final_results;
     }
 
-    auto t0 = std::chrono::steady_clock::now();
-    auto t0_wall = std::chrono::system_clock::now();
+    // One dice roll per request (MC_HIFREQ_LOG_SAMPLE_RATE, default 0.1) gates
+    // both the breakdown timing capture and its emission below.
+    const bool breakdown_log = mooncake::logging::ShouldSampleHiFreqLog();
+    auto t0 = breakdown_log ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+    auto t0_wall = breakdown_log ? std::chrono::system_clock::now()
+                                 : std::chrono::system_clock::time_point{};
     auto t_query = t0, t_prep = t0, t_read = t0;
 
     // 1. Query metadata for all keys
@@ -3018,7 +3024,7 @@ RealClient::batch_get_buffer_internal(
                                 UbDiag::PerfLevel::MODULE);
     pt_bquery.Start();
     auto query_results = client_->BatchQuery(keys);
-    t_query = std::chrono::steady_clock::now();
+    if (breakdown_log) t_query = std::chrono::steady_clock::now();
     pt_bquery.End(0);
 
     // 2. Prepare for batch get: filter valid keys and prepare buffers
@@ -3125,7 +3131,7 @@ RealClient::batch_get_buffer_internal(
             .slices = std::move(slices)});
     }
 
-    t_prep = std::chrono::steady_clock::now();
+    if (breakdown_log) t_prep = std::chrono::steady_clock::now();
 
     if (valid_ops.empty() && disk_ops.empty()) {
         return final_results;
@@ -3221,13 +3227,12 @@ RealClient::batch_get_buffer_internal(
         pt_bssd.End(0);
     }
 
-    t_read = std::chrono::steady_clock::now();
-
-    size_t success_count = 0;
-    for (const auto &result : final_results) {
-        if (result) success_count++;
-    }
-    {
+    if (breakdown_log) {
+        t_read = std::chrono::steady_clock::now();
+        size_t success_count = 0;
+        for (const auto &result : final_results) {
+            if (result) success_count++;
+        }
         auto query_us = std::chrono::duration_cast<std::chrono::microseconds>(t_query - t0).count();
         auto prep_us = std::chrono::duration_cast<std::chrono::microseconds>(t_prep - t_query).count();
         auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(t_read - t_prep).count();
@@ -3626,59 +3631,69 @@ tl::expected<int64_t, ErrorCode> RealClient::execute_ranged_read(
 tl::expected<int64_t, ErrorCode> RealClient::get_into_range_internal(
     const std::string &key, void *buffer, size_t dst_offset, size_t src_offset,
     size_t size, bool size_is_buffer_capacity) {
-    auto t0 = std::chrono::steady_clock::now();
-    auto t0_wall = std::chrono::system_clock::now();
+    // One dice roll per request (MC_HIFREQ_LOG_SAMPLE_RATE, default 0.1) gates
+    // both the breakdown timing capture and its emission below.
+    const bool breakdown_log = mooncake::logging::ShouldSampleHiFreqLog();
+    auto t0 = breakdown_log ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+    auto t0_wall = breakdown_log ? std::chrono::system_clock::now()
+                                 : std::chrono::system_clock::time_point{};
     auto metadata_result = resolve_ranged_read_metadata(key);
     if (!metadata_result) {
-        auto now = std::chrono::steady_clock::now();
-        auto total_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - t0)
-                .count();
-        LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
-                  << FormatWallClock(t0_wall)
-                  << "] query_us[0] select_us[0] read_us[0] total_us["
-                  << total_us << "] type[unknown] mode[unknown] status["
-                  << toString(metadata_result.error()) << "]";
+        if (breakdown_log) {
+            auto now = std::chrono::steady_clock::now();
+            auto total_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(now - t0)
+                    .count();
+            LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
+                      << FormatWallClock(t0_wall)
+                      << "] query_us[0] select_us[0] read_us[0] total_us["
+                      << total_us << "] type[unknown] mode[unknown] status["
+                      << toString(metadata_result.error()) << "]";
+        }
         return tl::unexpected(metadata_result.error());
     }
 
     const auto &metadata = metadata_result.value();
-    const auto read_start = std::chrono::steady_clock::now();
+    auto read_start = breakdown_log ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
     auto read_result = execute_ranged_read(key, buffer, dst_offset, src_offset,
                                            size, metadata,
                                            size_is_buffer_capacity);
-    auto read_end = std::chrono::steady_clock::now();
 
-    const auto actual_size =
-        size_is_buffer_capacity ? metadata.total_size : size;
-    const char *mode =
-        (src_offset == 0 && actual_size == metadata.total_size) ? "full"
-                                                               : "range";
-    std::string status = "read_ok";
-    if (!read_result) {
-        if (metadata.replica.is_local_disk_replica()) {
-            status = "ssd_fail";
-        } else if (metadata.replica.is_disk_replica()) {
-            status = "disk_fail";
-        } else if (metadata.replica.is_memory_replica()) {
-            status = "mem_fail";
-        } else {
-            status = toString(read_result.error());
+    if (breakdown_log) {
+        auto read_end = std::chrono::steady_clock::now();
+        const auto actual_size =
+            size_is_buffer_capacity ? metadata.total_size : size;
+        const char *mode =
+            (src_offset == 0 && actual_size == metadata.total_size) ? "full"
+                                                                   : "range";
+        std::string status = "read_ok";
+        if (!read_result) {
+            if (metadata.replica.is_local_disk_replica()) {
+                status = "ssd_fail";
+            } else if (metadata.replica.is_disk_replica()) {
+                status = "disk_fail";
+            } else if (metadata.replica.is_memory_replica()) {
+                status = "mem_fail";
+            } else {
+                status = toString(read_result.error());
+            }
         }
-    }
 
-    auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                       read_end - read_start)
-                       .count();
-    auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                        read_end - t0)
-                        .count();
-    LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
-              << FormatWallClock(t0_wall) << "] query_us["
-              << metadata.query_us << "] select_us[" << metadata.select_us
-              << "] read_us[" << read_us << "] total_us[" << total_us
-              << "] type[" << metadata.replica_type << "] mode[" << mode
-              << "] status[" << status << "]";
+        auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                           read_end - read_start)
+                           .count();
+        auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            read_end - t0)
+                            .count();
+        LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
+                  << FormatWallClock(t0_wall) << "] query_us["
+                  << metadata.query_us << "] select_us[" << metadata.select_us
+                  << "] read_us[" << read_us << "] total_us[" << total_us
+                  << "] type[" << metadata.replica_type << "] mode[" << mode
+                  << "] status[" << status << "]";
+    }
 
     return read_result;
 }
@@ -4698,8 +4713,13 @@ std::vector<tl::expected<int64_t, ErrorCode>>
 RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
                                     const std::vector<void *> &buffers,
                                     const std::vector<size_t> &sizes) {
-    auto start_time = std::chrono::steady_clock::now();
-    auto t0_wall = std::chrono::system_clock::now();
+    // One dice roll per request (MC_HIFREQ_LOG_SAMPLE_RATE, default 0.1) gates
+    // both the breakdown timing capture and its emission below.
+    const bool breakdown_log = mooncake::logging::ShouldSampleHiFreqLog();
+    auto start_time = breakdown_log ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
+    auto t0_wall = breakdown_log ? std::chrono::system_clock::now()
+                                 : std::chrono::system_clock::time_point{};
     // Validate preconditions
     if (!client_) {
         MC_LOG(ERROR) << "Client is not initialized";
@@ -4727,7 +4747,8 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
                                UbDiag::PerfLevel::MODULE);
     pt_query.Start();
     const auto query_results = client_->BatchQuery(keys);
-    auto t_query = std::chrono::steady_clock::now();
+    auto t_query = start_time;
+    if (breakdown_log) t_query = std::chrono::steady_clock::now();
     pt_query.End(0);
 
     // Process each key individually and prepare for batch transfer
@@ -4842,28 +4863,31 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
         results[i] = static_cast<int64_t>(total_size);
     }
 
-    auto t_prep = std::chrono::steady_clock::now();
+    auto t_prep = start_time;
+    if (breakdown_log) t_prep = std::chrono::steady_clock::now();
 
     // Early return if no valid operations
     if (valid_operations.empty() && valid_local_disk_operations.empty() &&
         disk_operations.empty()) {
-        auto query_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(t_query -
-                                                                  start_time)
-                .count();
-        auto prep_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(t_prep -
-                                                                  t_query)
-                .count();
-        auto total_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(t_prep -
-                                                                  start_time)
-                .count();
-        LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
-                  << "] start_time[" << FormatWallClock(t0_wall)
-                  << "] query_us[" << query_us << "] prep_us[" << prep_us
-                  << "] read_us[0] total_us[" << total_us
-                  << "] mem_ops[0] disk_ops[0] ssd_offload_ops[0] success[0]";
+        if (breakdown_log) {
+            auto query_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    t_query - start_time)
+                    .count();
+            auto prep_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(t_prep -
+                                                                      t_query)
+                    .count();
+            auto total_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    t_prep - start_time)
+                    .count();
+            LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+                      << "] start_time[" << FormatWallClock(t0_wall)
+                      << "] query_us[" << query_us << "] prep_us[" << prep_us
+                      << "] read_us[0] total_us[" << total_us
+                      << "] mem_ops[0] disk_ops[0] ssd_offload_ops[0] success[0]";
+        }
         return results;
     }
 
@@ -5042,32 +5066,37 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
         }
     }
 
-    auto t_read = std::chrono::steady_clock::now();
-    size_t success_count = 0;
-    for (const auto &result : results) {
-        if (result && result.value() > 0) success_count++;
+    if (breakdown_log) {
+        auto t_read = std::chrono::steady_clock::now();
+        size_t success_count = 0;
+        for (const auto &result : results) {
+            if (result && result.value() > 0) success_count++;
+        }
+        auto query_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_query -
+                                                                  start_time)
+                .count();
+        auto prep_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_prep -
+                                                                  t_query)
+                .count();
+        auto read_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_read -
+                                                                  t_prep)
+                .count();
+        auto total_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(t_read -
+                                                                  start_time)
+                .count();
+        LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+                  << "] start_time[" << FormatWallClock(t0_wall)
+                  << "] query_us[" << query_us << "] prep_us[" << prep_us
+                  << "] read_us[" << read_us << "] total_us[" << total_us
+                  << "] mem_ops[" << valid_operations.size() << "] disk_ops["
+                  << disk_operations.size() << "] ssd_offload_ops["
+                  << offload_object_count << "] success[" << success_count
+                  << "]";
     }
-    auto query_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(t_query -
-                                                              start_time)
-            .count();
-    auto prep_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(t_prep - t_query)
-            .count();
-    auto read_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(t_read - t_prep)
-            .count();
-    auto total_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(t_read -
-                                                              start_time)
-            .count();
-    LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
-              << "] start_time[" << FormatWallClock(t0_wall)
-              << "] query_us[" << query_us << "] prep_us[" << prep_us
-              << "] read_us[" << read_us << "] total_us[" << total_us
-              << "] mem_ops[" << valid_operations.size() << "] disk_ops["
-              << disk_operations.size() << "] ssd_offload_ops["
-              << offload_object_count << "] success[" << success_count << "]";
 
     return results;
 }
