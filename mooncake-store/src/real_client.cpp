@@ -13,6 +13,8 @@
 
 #include <dlfcn.h>  // for dlsym (Python detection)
 #include <cstdlib>  // for atexit
+#include <cstdio>   // for snprintf (t0 wall-clock formatting)
+#include <ctime>    // for localtime_r / strftime (t0 wall-clock formatting)
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -52,6 +54,26 @@ DEFINE_int32(http_port, 9300,
 
 namespace mooncake {
 namespace {
+// Format a wall-clock time_point as "YYYY-MM-DD HH:MM:SS.ffffff" for the
+// request-start (t0) field in the *_breakdown logs.  Only called at log
+// emission time (guarded by ShouldLog(INFO)); the cheap system_clock::now()
+// that captures t0 happens at request start, so this formatting cost stays
+// out of the measured latency window.
+std::string FormatWallClock(std::chrono::system_clock::time_point tp) {
+    auto t = std::chrono::system_clock::to_time_t(tp);
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  tp.time_since_epoch())
+                  .count() %
+              1000000;
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    char out[48];
+    std::snprintf(out, sizeof(out), "%s.%06lld", buf,
+                  static_cast<long long>(us));
+    return out;
+}
 #ifdef USE_ASCEND_DIRECT
 bool checkAcl(aclError result, const char *message) {
     if (result != ACL_ERROR_NONE) {
@@ -2627,6 +2649,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
     const bool breakdown_log = mooncake::logging::ShouldLog(google::INFO);
     auto t0 = breakdown_log ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
+    auto t0_wall = breakdown_log ? std::chrono::system_clock::now()
+                                 : std::chrono::system_clock::time_point{};
     auto t_query = t0, t_select = t0, t_alloc = t0;
     std::string replica_type;
 
@@ -2646,8 +2670,6 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
                    << " with error: " << toString(query_result.error());
         return nullptr;
     }
-
-    MC_LOG(INFO) << "query_success key[" << key << "] replicas[" << query_result.value().replicas.size() << "]";
 
     const std::vector<Replica::Descriptor> &replica_list =
         query_result.value().replicas;
@@ -2680,19 +2702,12 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         const auto& endpoint = replica.get_memory_descriptor().buffer_descriptor.transport_endpoint_;
         bool is_local = local_endpoints.count(endpoint) > 0;
         replica_type = is_local ? "memory_local" : "memory_remote";
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] endpoint[" << endpoint << "] size[" << total_length << "]";
     } else if (replica.is_local_disk_replica()) {
         const auto& ld_desc = replica.get_local_disk_descriptor();
         bool is_local_holder = (ld_desc.client_id == client_->getClientId());
         replica_type = is_local_holder ? "local_disk_local" : "local_disk_remote";
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] endpoint[" << ld_desc.transport_endpoint << "] size[" << total_length << "]";
     } else {
         replica_type = "disk";
-        std::string file_path = replica.get_disk_descriptor().file_path;
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type[" << replica_type
-                  << "] file_path[" << file_path << "] size[" << total_length << "]";
     }
 
     if (total_length == 0) {
@@ -2722,7 +2737,8 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
         auto alloc_us = std::chrono::duration_cast<std::chrono::microseconds>(t_alloc - t_select).count();
         auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(now - t_alloc).count();
         auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(now - t0).count();
-        MC_LOG(INFO) << "get_breakdown key[" << key << "] query_us[" << query_us << "] select_us[" << select_us
+        LOG(INFO) << "get_breakdown key[" << key << "] start_time[" << FormatWallClock(t0_wall)
+                  << "] query_us[" << query_us << "] select_us[" << select_us
                   << "] alloc_us[" << alloc_us << "] read_us[" << read_us << "] total_us[" << total_us
                   << "] type[" << replica_type << "] status[" << status << "]";
     };
@@ -2785,7 +2801,6 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer_internal(
 // Implementation of get_buffer method
 std::shared_ptr<BufferHandle> RealClient::get_buffer(const std::string &key) {
     mooncake::logging::ScopedTraceId trace(mooncake::logging::NewTraceId());
-    MC_LOG(INFO) << "get_buffer_start key[" << key << "]";
     return execute_timed_operation<std::shared_ptr<BufferHandle>>(
         [&]() {
             UbDiag::PerfPoint pt_full(PerfKey::GET_BUFFER_INTERNAL_FULL,
@@ -2801,8 +2816,6 @@ std::shared_ptr<BufferHandle> RealClient::get_buffer(const std::string &key) {
             client_->ObserveTransferOperation(TransferOperationKind::kRead,
                                               "get_buffer", size,
                                               latency_us);
-            LogRealClientSingleSlow("get_buffer", key, size, latency_us,
-                                    buffer ? 0 : -1);
         });
 }
 
@@ -2997,6 +3010,7 @@ RealClient::batch_get_buffer_internal(
     }
 
     auto t0 = std::chrono::steady_clock::now();
+    auto t0_wall = std::chrono::system_clock::now();
     auto t_query = t0, t_prep = t0, t_read = t0;
 
     // 1. Query metadata for all keys
@@ -3006,12 +3020,6 @@ RealClient::batch_get_buffer_internal(
     auto query_results = client_->BatchQuery(keys);
     t_query = std::chrono::steady_clock::now();
     pt_bquery.End(0);
-
-    size_t num_found = 0;
-    for (const auto &result : query_results) {
-        if (result) num_found++;
-    }
-    MC_LOG(INFO) << "batch_query_result num_keys[" << keys.size() << "] num_found[" << num_found << "]";
 
     // 2. Prepare for batch get: filter valid keys and prepare buffers
     struct KeyOp {
@@ -3224,7 +3232,8 @@ RealClient::batch_get_buffer_internal(
         auto prep_us = std::chrono::duration_cast<std::chrono::microseconds>(t_prep - t_query).count();
         auto read_us = std::chrono::duration_cast<std::chrono::microseconds>(t_read - t_prep).count();
         auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(t_read - t0).count();
-        MC_LOG(INFO) << "batch_get_breakdown num_keys[" << keys.size()
+        LOG(INFO) << "batch_get_breakdown num_keys[" << keys.size()
+                  << "] start_time[" << FormatWallClock(t0_wall)
                   << "] query_us[" << query_us << "] prep_us[" << prep_us
                   << "] read_us[" << read_us << "] total_us[" << total_us
                   << "] batch_get_ops[" << valid_ops.size()
@@ -3239,7 +3248,6 @@ RealClient::batch_get_buffer_internal(
 std::vector<std::shared_ptr<BufferHandle>> RealClient::batch_get_buffer(
     const std::vector<std::string> &keys) {
     mooncake::logging::ScopedTraceId trace(mooncake::logging::NewTraceId());
-    MC_LOG(INFO) << "batch_get_buffer_start num_keys[" << keys.size() << "]";
     return execute_timed_operation<std::vector<std::shared_ptr<BufferHandle>>>(
         [&]() {
             UbDiag::PerfPoint pt_full(PerfKey::GET_BATCH_BUFFER_INTERNAL_FULL,
@@ -3252,15 +3260,9 @@ std::vector<std::shared_ptr<BufferHandle>> RealClient::batch_get_buffer(
         [](const auto &) { return true; },
         [&](uint64_t latency_us, const auto &buffers) {
             const auto size = sum_buffer_handle_sizes(buffers);
-            size_t success = 0;
-            for (const auto &buffer : buffers) {
-                if (buffer) success++;
-            }
             client_->ObserveTransferOperation(
                 TransferOperationKind::kRead, "batch_get_buffer", size,
                 latency_us);
-            LogRealClientBatchSlow("batch_get_buffer", keys.size(), size,
-                                   latency_us, success);
         });
 }
 
@@ -3355,9 +3357,6 @@ RealClient::resolve_ranged_read_metadata(const std::string &key) {
         return tl::unexpected(query_result.error());
     }
 
-    MC_LOG(INFO) << "query_success key[" << key << "] replicas["
-              << query_result.value().replicas.size() << "]";
-
     const auto &replica_list = query_result.value().replicas;
     if (replica_list.empty()) {
         MC_LOG(ERROR) << "Internal error: replica_list is empty";
@@ -3388,22 +3387,12 @@ RealClient::resolve_ranged_read_metadata(const std::string &key) {
                 .transport_endpoint_;
         bool is_local = local_endpoints.count(endpoint) > 0;
         replica_type = is_local ? "memory_local" : "memory_remote";
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type["
-                  << replica_type << "] endpoint[" << endpoint << "] size["
-                  << total_size << "]";
     } else if (replica.is_local_disk_replica()) {
         const auto& ld_desc = replica.get_local_disk_descriptor();
         bool is_local_holder = (ld_desc.client_id == client_->getClientId());
         replica_type = is_local_holder ? "local_disk_local" : "local_disk_remote";
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type["
-                  << replica_type << "] endpoint[" << ld_desc.transport_endpoint << "] size["
-                  << total_size << "]";
     } else {
         replica_type = "disk";
-        std::string file_path = replica.get_disk_descriptor().file_path;
-        MC_LOG(INFO) << "replica_selected key[" << key << "] type["
-                  << replica_type << "] file_path[" << file_path << "] size["
-                  << total_size << "]";
     }
 
     return RangedReadMetadata{.query_result = std::move(query_value),
@@ -3638,18 +3627,15 @@ tl::expected<int64_t, ErrorCode> RealClient::get_into_range_internal(
     const std::string &key, void *buffer, size_t dst_offset, size_t src_offset,
     size_t size, bool size_is_buffer_capacity) {
     auto t0 = std::chrono::steady_clock::now();
+    auto t0_wall = std::chrono::system_clock::now();
     auto metadata_result = resolve_ranged_read_metadata(key);
     if (!metadata_result) {
-        if ((metadata_result.error() == ErrorCode::OBJECT_NOT_FOUND ||
-             metadata_result.error() == ErrorCode::REPLICA_IS_NOT_READY) &&
-            src_offset == 0) {
-            MC_VLOG(1) << "Object not found for key: " << key;
-        }
         auto now = std::chrono::steady_clock::now();
         auto total_us =
             std::chrono::duration_cast<std::chrono::microseconds>(now - t0)
                 .count();
-        MC_LOG(INFO) << "get_into_breakdown key[" << key
+        LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
+                  << FormatWallClock(t0_wall)
                   << "] query_us[0] select_us[0] read_us[0] total_us["
                   << total_us << "] type[unknown] mode[unknown] status["
                   << toString(metadata_result.error()) << "]";
@@ -3687,7 +3673,8 @@ tl::expected<int64_t, ErrorCode> RealClient::get_into_range_internal(
     auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(
                         read_end - t0)
                         .count();
-    MC_LOG(INFO) << "get_into_breakdown key[" << key << "] query_us["
+    LOG(INFO) << "get_into_breakdown key[" << key << "] start_time["
+              << FormatWallClock(t0_wall) << "] query_us["
               << metadata.query_us << "] select_us[" << metadata.select_us
               << "] read_us[" << read_us << "] total_us[" << total_us
               << "] type[" << metadata.replica_type << "] mode[" << mode
@@ -3699,7 +3686,6 @@ tl::expected<int64_t, ErrorCode> RealClient::get_into_range_internal(
 int64_t RealClient::get_into(const std::string &key, void *buffer,
                              size_t size) {
     mooncake::logging::ScopedTraceId trace(mooncake::logging::NewTraceId());
-    MC_LOG(INFO) << "get_into_start key[" << key << "] size[" << size << "]";
     auto result = execute_timed_operation<tl::expected<int64_t, ErrorCode>>(
         [&]() {
             UbDiag::PerfPoint pt_full(PerfKey::GET_INTO_INTERNAL,
@@ -3716,10 +3702,6 @@ int64_t RealClient::get_into(const std::string &key, void *buffer,
             client_->ObserveTransferOperation(
                 TransferOperationKind::kRead, "get_into",
                 bytes > 0 ? static_cast<uint64_t>(bytes) : 0, latency_us);
-            LogRealClientSingleSlow("get_into", key,
-                                    bytes > 0 ? static_cast<uint64_t>(bytes)
-                                              : 0,
-                                    latency_us, to_py_ret(ret));
         });
     return to_py_ret(result);
 }
@@ -4468,8 +4450,6 @@ std::vector<int64_t> RealClient::batch_get_into(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes) {
     mooncake::logging::ScopedTraceId trace(mooncake::logging::NewTraceId());
-    MC_LOG(INFO) << "batch_get_into_start num_keys[" << keys.size()
-                 << "] total_size[" << sum_sizes(sizes) << "]";
     auto internal_results =
         execute_timed_operation<std::vector<tl::expected<int64_t, ErrorCode>>>(
             [&]() {
@@ -4491,12 +4471,6 @@ std::vector<int64_t> RealClient::batch_get_into(
                 client_->ObserveTransferOperation(
                     TransferOperationKind::kRead, "batch_get_into", size,
                     latency_us);
-                size_t success = 0;
-                for (int64_t rc : py_results) {
-                    if (rc >= 0) success++;
-                }
-                LogRealClientBatchSlow("batch_get_into", keys.size(), size,
-                                       latency_us, success);
             });
     std::vector<int64_t> results;
     results.reserve(internal_results.size());
@@ -4725,6 +4699,7 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
                                     const std::vector<void *> &buffers,
                                     const std::vector<size_t> &sizes) {
     auto start_time = std::chrono::steady_clock::now();
+    auto t0_wall = std::chrono::system_clock::now();
     // Validate preconditions
     if (!client_) {
         MC_LOG(ERROR) << "Client is not initialized";
@@ -4754,13 +4729,6 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
     const auto query_results = client_->BatchQuery(keys);
     auto t_query = std::chrono::steady_clock::now();
     pt_query.End(0);
-
-    size_t num_found = 0;
-    for (const auto &result : query_results) {
-        if (result) num_found++;
-    }
-    MC_LOG(INFO) << "batch_get_into_query_result num_keys[" << num_keys
-              << "] num_found[" << num_found << "]";
 
     // Process each key individually and prepare for batch transfer
     struct ValidKeyInfo {
@@ -4891,7 +4859,8 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
             std::chrono::duration_cast<std::chrono::microseconds>(t_prep -
                                                                   start_time)
                 .count();
-        MC_LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+        LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+                  << "] start_time[" << FormatWallClock(t0_wall)
                   << "] query_us[" << query_us << "] prep_us[" << prep_us
                   << "] read_us[0] total_us[" << total_us
                   << "] mem_ops[0] disk_ops[0] ssd_offload_ops[0] success[0]";
@@ -5092,7 +5061,8 @@ RealClient::batch_get_into_internal(const std::vector<std::string> &keys,
         std::chrono::duration_cast<std::chrono::microseconds>(t_read -
                                                               start_time)
             .count();
-    MC_LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+    LOG(INFO) << "batch_get_into_breakdown num_keys[" << num_keys
+              << "] start_time[" << FormatWallClock(t0_wall)
               << "] query_us[" << query_us << "] prep_us[" << prep_us
               << "] read_us[" << read_us << "] total_us[" << total_us
               << "] mem_ops[" << valid_operations.size() << "] disk_ops["
@@ -6040,13 +6010,6 @@ RealClient::batch_get_into_offload_object_internal(
         std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
                                                               start_time)
             .count());
-    int64_t total_size = 0;
-    for (auto s : sizes) total_size += s;
-    MC_LOG(INFO) << "ssd_read_detail endpoint[" << target_rpc_service_addr
-              << "] num_keys[" << objects.size()
-              << "] total_size[" << total_size
-              << "] elapsed_ms[" << elapsed_time
-              << "] batch_id[" << batchGetResp->batch_id << "]";
 
     // Release buffer immediately after transfer completion (fire-and-forget)
     // This allows early buffer reclamation instead of waiting for GC lease
