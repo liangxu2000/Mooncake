@@ -19,7 +19,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cctype>
-#include <dirent.h>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <unistd.h>
@@ -161,7 +161,6 @@ void loadGlobalConfig(GlobalConfig& config) {
         else {
             LOG(ERROR) << "Ignore value from environment variable MC_MTU, it "
                           "should be 512|1024|2048|4096";
-            exit(EXIT_FAILURE);
         }
     }
 
@@ -227,6 +226,18 @@ void loadGlobalConfig(GlobalConfig& config) {
                 << "Ignore value from environment variable MC_RETRY_CNT";
     }
 
+    const char* auto_gid_max_retries_env =
+        std::getenv("MC_AUTO_GID_MAX_RETRIES");
+    if (auto_gid_max_retries_env) {
+        int val = atoi(auto_gid_max_retries_env);
+        if (val >= 0 && val <= 16) {
+            config.auto_gid_max_retries = val;
+        } else {
+            LOG(WARNING) << "Ignore value from environment variable "
+                            "MC_AUTO_GID_MAX_RETRIES";
+        }
+    }
+
     const char* disable_metacache = std::getenv("MC_DISABLE_METACACHE");
     if (disable_metacache) {
         config.metacache = false;
@@ -235,13 +246,30 @@ void loadGlobalConfig(GlobalConfig& config) {
     const char* handshake_listen_backlog =
         std::getenv("MC_HANDSHAKE_LISTEN_BACKLOG");
     if (handshake_listen_backlog) {
-        int val = std::stoi(handshake_listen_backlog);
-        if (val > 0) {
-            config.handshake_listen_backlog = val;
-        } else {
-            LOG(WARNING) << "Ignore value from environment variable "
-                            "MC_HANDSHAKE_LISTEN_BACKLOG";
+        try {
+            int val = std::stoi(handshake_listen_backlog);
+            if (val > 0) {
+                config.handshake_listen_backlog = val;
+            } else {
+                LOG(WARNING) << "Ignore value from environment variable "
+                                "MC_HANDSHAKE_LISTEN_BACKLOG";
+            }
+        } catch (const std::exception& e) {
+            LOG(WARNING) << "Invalid MC_HANDSHAKE_LISTEN_BACKLOG environment "
+                            "value: "
+                         << handshake_listen_backlog << ". Error: " << e.what();
         }
+    }
+
+    const char* handshake_connect_timeout =
+        std::getenv("MC_HANDSHAKE_CONNECT_TIMEOUT");
+    if (handshake_connect_timeout) {
+        int val = atoi(handshake_connect_timeout);
+        if (val > 0 && val < 3600)
+            config.handshake_connect_timeout = val;
+        else
+            LOG(WARNING) << "Ignore value from environment variable "
+                            "MC_HANDSHAKE_CONNECT_TIMEOUT";
     }
 
     const char* log_level = std::getenv("MC_LOG_LEVEL");
@@ -277,7 +305,8 @@ void loadGlobalConfig(GlobalConfig& config) {
         if (!google::IsGoogleLoggingInitialized()) {
             google::InitGoogleLogging("mooncake-transfer-engine");
         }
-        if (opendir(log_dir_path) == NULL) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(log_dir_path, ec)) {
             LOG(WARNING)
                 << "Path [" << log_dir_path
                 << "] is not a valid directory path. Still logging to stderr.";
