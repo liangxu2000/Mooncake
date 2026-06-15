@@ -51,6 +51,23 @@ double ParseHiFreqLogSampleRate() {
     return rate;
 }
 
+// Interval for the background periodic flush performed by the async worker
+// thread.  Default 1s; tunable via MC_LOG_FLUSH_SECS (accepts fractional
+// seconds, e.g. "0.5").  Clamped to a 50ms floor to avoid pathological busy
+// flushing.
+std::chrono::milliseconds ParseFlushIntervalMs() {
+    double secs = 1.0;
+    const char* value = std::getenv("MC_LOG_FLUSH_SECS");
+    if (value != nullptr && *value != '\0') {
+        errno = 0;
+        char* end = nullptr;
+        double parsed = std::strtod(value, &end);
+        if (end != value && errno == 0 && parsed > 0.0) secs = parsed;
+    }
+    if (secs < 0.05) secs = 0.05;
+    return std::chrono::milliseconds(static_cast<long long>(secs * 1000.0));
+}
+
 struct LogEntry {
     const char* file;
     int line;
@@ -115,30 +132,50 @@ class AsyncLogQueue {
     }
 
     void WorkerLoop() {
+        // The periodic flush runs here, on the worker thread, off the hot path:
+        // log producers never pay a flush cost.  google::FlushLogFiles drains
+        // glog's file buffer, which covers BOTH the async MC_LOG output written
+        // below AND synchronous LOG()/MC_LOG emitted on business threads (they
+        // share the same glog file).  This is what keeps the tail of the log
+        // (e.g. get_into_breakdown / put_result) from being lost when the host
+        // process is torn down without running atexit/static destructors
+        // (Go's os.Exit, SIGKILL under k8s, ...).
+        const auto flush_interval = ParseFlushIntervalMs();
+        auto last_flush = std::chrono::steady_clock::now();
         while (true) {
             LogEntry entry;
+            bool have_entry = false;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                queue_not_empty_.wait(lock, [this] {
+                queue_not_empty_.wait_for(lock, flush_interval, [this] {
                     return stopped_ || !queue_.empty();
                 });
-                if (queue_.empty()) {
+                if (!queue_.empty()) {
+                    entry = std::move(queue_.front());
+                    queue_.pop();
+                    ++active_writes_;
+                    have_entry = true;
+                } else {
                     queue_empty_.notify_all();
                     if (stopped_) return;
-                    continue;
                 }
-                entry = std::move(queue_.front());
-                queue_.pop();
-                ++active_writes_;
             }
-            queue_not_full_.notify_one();
-            WriteSync(entry);
-            {
+            if (have_entry) {
+                queue_not_full_.notify_one();
+                WriteSync(entry);
                 std::lock_guard<std::mutex> lock(mutex_);
                 --active_writes_;
                 if (queue_.empty() && active_writes_ == 0) {
                     queue_empty_.notify_all();
                 }
+            }
+            // Flush at most once per interval, whether we just drained an entry
+            // or timed out idle.  Bounds the worst-case loss window (on hard
+            // kill) to one interval, with no per-message flush overhead.
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_flush >= flush_interval) {
+                google::FlushLogFiles(google::INFO);
+                last_flush = now;
             }
         }
     }
