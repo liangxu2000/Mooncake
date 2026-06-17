@@ -342,12 +342,12 @@ class BenchmarkStats {
                       << "\n";
             std::cout << "    P90:   " << std::setw(12) << PercentileUs(90)
                       << "\n";
-            std::cout << "    P99:   " << std::setw(12) << PercentileUs(99);
-            if (n < 100) std::cout << "  (n<100)";
-            std::cout << "\n";
-            std::cout << "    P999:  " << std::setw(12) << PercentileUs(99.9);
-            if (n < 1000) std::cout << "  (n<1000)";
-            std::cout << "\n";
+            std::cout << "    P95:   " << std::setw(12) << PercentileUs(95)
+                      << "\n";
+            std::cout << "    P99:   " << std::setw(12) << PercentileUs(99)
+                      << "\n";
+            std::cout << "    P999:  " << std::setw(12) << PercentileUs(99.9)
+                      << "\n";
             std::cout << "    Max:   " << std::setw(12)
                       << NanosToUs(merged_latencies_ns_.back()) << "\n";
         }
@@ -877,6 +877,7 @@ class StressBenchmark {
         int64_t max_latency_ns = 0;
         double p50_latency_ns = 0;
         double p90_latency_ns = 0;
+        double p95_latency_ns = 0;
         double p99_latency_ns = 0;
         double p999_latency_ns = 0;
         double p9999_latency_ns = 0;
@@ -897,20 +898,15 @@ class StressBenchmark {
             auto percentile = [&](double p) -> double {
                 if (n == 0) return 0;
                 size_t idx = static_cast<size_t>(p / 100.0 * (n - 1));
+                if (idx >= n) idx = n - 1;
                 return static_cast<double>(latencies_ns[idx]);
             };
             p50_latency_ns = percentile(50);
             p90_latency_ns = percentile(90);
-            if (n >= 100) {
-                p99_latency_ns = latencies_ns[static_cast<size_t>(n * 0.99)];
-            }
-            if (n >= 1000) {
-                p999_latency_ns = latencies_ns[static_cast<size_t>(n * 0.999)];
-            }
-            if (n >= 10000) {
-                p9999_latency_ns =
-                    latencies_ns[static_cast<size_t>(n * 0.9999)];
-            }
+            p95_latency_ns = percentile(95);
+            p99_latency_ns = percentile(99);
+            p999_latency_ns = percentile(99.9);
+            p9999_latency_ns = percentile(99.99);
         }
 
         void Aggregate(const IntervalLatencyStats& other) {
@@ -918,6 +914,7 @@ class StressBenchmark {
             max_latency_ns = std::max(max_latency_ns, other.max_latency_ns);
             p50_latency_ns = std::max(p50_latency_ns, other.p50_latency_ns);
             p90_latency_ns = std::max(p90_latency_ns, other.p90_latency_ns);
+            p95_latency_ns = std::max(p95_latency_ns, other.p95_latency_ns);
             p99_latency_ns = std::max(p99_latency_ns, other.p99_latency_ns);
             p999_latency_ns = std::max(p999_latency_ns, other.p999_latency_ns);
             p9999_latency_ns =
@@ -1134,6 +1131,7 @@ class StressBenchmark {
                           << NanosToUs(interval_stats.avg_latency_ns)
                           << ", P50=" << NanosToUs(interval_stats.p50_latency_ns)
                           << ", P90=" << NanosToUs(interval_stats.p90_latency_ns)
+                          << ", P95=" << NanosToUs(interval_stats.p95_latency_ns)
                           << ", P99="
                           << NanosToUs(interval_stats.p99_latency_ns)
                           << "  total: " << cur_queries << " queries, "
@@ -1211,18 +1209,14 @@ class StressBenchmark {
                       << NanosToUs(overall.p50_latency_ns) << "\n";
             std::cout << "    P90:   " << std::setw(12)
                       << NanosToUs(overall.p90_latency_ns) << "\n";
+            std::cout << "    P95:   " << std::setw(12)
+                      << NanosToUs(overall.p95_latency_ns) << "\n";
             std::cout << "    P99:   " << std::setw(12)
-                      << NanosToUs(overall.p99_latency_ns);
-            if (total_latency_samples < 100) std::cout << "  (n<100)";
-            std::cout << "\n";
+                      << NanosToUs(overall.p99_latency_ns) << "\n";
             std::cout << "    P999:  " << std::setw(12)
-                      << NanosToUs(overall.p999_latency_ns);
-            if (total_latency_samples < 1000) std::cout << "  (n<1000)";
-            std::cout << "\n";
+                      << NanosToUs(overall.p999_latency_ns) << "\n";
             std::cout << "    P9999: " << std::setw(12)
-                      << NanosToUs(overall.p9999_latency_ns);
-            if (total_latency_samples < 10000) std::cout << "  (n<10000)";
-            std::cout << "\n";
+                      << NanosToUs(overall.p9999_latency_ns) << "\n";
             std::cout << "    Max:   " << std::setw(12)
                       << NanosToUs(overall.max_latency_ns) << "\n";
         }
