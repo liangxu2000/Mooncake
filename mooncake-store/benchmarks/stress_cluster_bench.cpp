@@ -925,10 +925,19 @@ class StressBenchmark {
             throughput_mbps += other.throughput_mbps;
             keys_per_sec += other.keys_per_sec;
             queries_per_sec += other.queries_per_sec;
+            // Weighted average: accumulate sum and count
+            total_latency_sum_ns +=
+                other.avg_latency_ns *
+                static_cast<double>(other.latencies_ns.size());
             total_samples += other.latencies_ns.size();
+            if (total_samples > 0) {
+                avg_latency_ns =
+                    total_latency_sum_ns / static_cast<double>(total_samples);
+            }
         }
 
         size_t total_samples = 0;
+        double total_latency_sum_ns = 0;
     };
 
     int RunSegmentReadDuration(const std::vector<std::string>& read_segments,
