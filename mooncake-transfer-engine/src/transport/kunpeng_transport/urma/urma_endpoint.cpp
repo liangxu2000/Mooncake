@@ -95,7 +95,20 @@ int UrmaContext::construct(GlobalConfig& config) {
     // urma: Here, num_jfc_list and num_jfces use the same value,
     // meaning one JFC is bound to one JFCE.
     // max_jfc_e uses the default value DEFAULT_DEPTH.
-    if (openDevice(device_name_, port_, eid_index)) {
+    // Determine the active port:
+    //   - If config.urma_active_port is -1 (default), openDevice will
+    //     auto-scan port_attr to find the first active port.
+    //   - If config.urma_active_port >= 0 (set via MC_URMA_ACTIVE_PORT),
+    //     openDevice will use the specified port index directly.
+    uint8_t active_port = static_cast<uint8_t>(-1);
+    if (config.urma_active_port >= 0) {
+        active_port = static_cast<uint8_t>(config.urma_active_port);
+        LOG(INFO) << "Using active port " << static_cast<int>(active_port)
+                  << " from config (MC_URMA_ACTIVE_PORT)";
+    } else {
+        LOG(INFO) << "Auto-selecting active port (MC_URMA_ACTIVE_PORT not set)";
+    }
+    if (openDevice(device_name_, active_port, eid_index)) {
         LOG(ERROR) << "Failed to open device : " << device_name_
                    << " with EID index : " << eid_index;
         return ERR_CONTEXT;
@@ -480,25 +493,30 @@ int UrmaContext::openDevice(const std::string& device_name, uint8_t port,
             urma_free_device_list(devices);
             return ERR_CONTEXT;
         }
-        for (int p = 0; p < MAX_PORT_CNT; p++) {
-            auto port_attr = dev_attr_.port_attr[p];
-            if (port_attr.state == URMA_PORT_ACTIVE ||
-                port_attr.state == URMA_PORT_ACTIVE_DEFER) {
-                port_ = p;
-                break;
+        if (port <= static_cast<uint8_t>(-1) || port >= MAX_PORT_CNT){
+            for (int p = 0; p < MAX_PORT_CNT; p++) {
+                auto port_attr = dev_attr_.port_attr[p];
+                if (port_attr.state == URMA_PORT_ACTIVE ||
+                    port_attr.state == URMA_PORT_ACTIVE_DEFER) {
+                    port_ = p;
+                    break;
+                }
             }
-        }
-        if (dev_attr_.port_cnt != 0 &&
-            dev_attr_.port_attr[port_].state != URMA_PORT_ACTIVE &&
-            dev_attr_.port_attr[port_].state != URMA_PORT_ACTIVE_DEFER) {
+            if (dev_attr_.port_cnt != 0 &&
+                dev_attr_.port_attr[port_].state != URMA_PORT_ACTIVE &&
+                dev_attr_.port_attr[port_].state != URMA_PORT_ACTIVE_DEFER) {
+                LOG(WARNING) << "Device " << device_name
+                            << " not found active port";
+                if (urma_delete_context(context)) {
+                    PLOG(ERROR) << "urma_delete_context(" << device_name << ") failed";
+                }
+                urma_free_device_list(devices);
+                return ERR_CONTEXT;
+            }
+        } else {
             LOG(WARNING) << "Device " << device_name
-                         << " not found active port";
-            if (urma_delete_context(context)) {
-                PLOG(ERROR)
-                    << "urma_delete_context(" << device_name << ") failed";
-            }
-            urma_free_device_list(devices);
-            return ERR_CONTEXT;
+                            << " manually specified port: " << static_cast<int>(port);
+            port_ = port;
         }
 
         updateUrmaGlobalConfig(dev_attr_);
