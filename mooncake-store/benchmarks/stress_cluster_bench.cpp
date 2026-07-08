@@ -218,6 +218,9 @@ DEFINE_uint64(duration, 0,
               "scenario (0 = read num_keys once)");
 DEFINE_uint64(statis_interval, 5,
               "Statistics print interval in seconds for segment_read scenario");
+DEFINE_uint64(key_offset, 0,
+              "Starting offset for key index, useful for avoiding key "
+              "collisions in multi-phase tests");
 
 using Clock = std::chrono::steady_clock;
 using Nanos = std::chrono::nanoseconds;
@@ -1298,7 +1301,7 @@ class StressBenchmark {
 
    private:
     static std::string MakeKey(size_t idx) {
-        return "bench_key_" + std::to_string(idx);
+	    return "bench_key_" + std::to_string(idx + FLAGS_key_offset);
     }
 
     void FillBuffer(size_t seed) {
